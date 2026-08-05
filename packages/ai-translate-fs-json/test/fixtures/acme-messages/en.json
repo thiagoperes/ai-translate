@@ -1,0 +1,10 @@
+{
+  "common": {
+    "home": "Home",
+    "blog": "Blog"
+  },
+  "demo": {
+    "highlightClass": "u-accent",
+    "bullet1": "<highlight>Cut spend by up to 10%</highlight>"
+  }
+}

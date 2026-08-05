@@ -1,0 +1,12 @@
+{
+  "getStartedWithPlan": "Get Started with {{plan}}",
+  "picker": {
+    "groupSummary": "{{count}} of {{total}} selected"
+  },
+  "routes": {
+    "charge insights": "Charge Insights"
+  },
+  "shortcuts": {
+    "profile": "⇧⌘P"
+  }
+}

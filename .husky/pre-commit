@@ -1,0 +1,4 @@
+set -eu
+
+pnpm lint
+pnpm -r --filter './packages/*' test

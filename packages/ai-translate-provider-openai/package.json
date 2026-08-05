@@ -1,0 +1,61 @@
+{
+  "name": "@ai-translate/provider-openai",
+  "version": "0.0.0",
+  "description": "OpenAI translation and semantic-audit providers for ai-translate, with structured output and batching.",
+  "keywords": [
+    "i18n",
+    "l10n",
+    "internationalization",
+    "localization",
+    "translation",
+    "openai",
+    "ai",
+    "llm"
+  ],
+  "license": "MIT",
+  "author": "Thiago Peres",
+  "homepage": "https://github.com/thiagoperes/ai-translate/tree/main/packages/ai-translate-provider-openai#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thiagoperes/ai-translate.git",
+    "directory": "packages/ai-translate-provider-openai"
+  },
+  "bugs": {
+    "url": "https://github.com/thiagoperes/ai-translate/issues"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "oxlint -c ../../.oxlintrc.json --deny-warnings src test vitest.config.ts tsdown.config.ts",
+    "test": "vitest run --config vitest.config.ts",
+    "coverage": "vitest run --config vitest.config.ts --coverage",
+    "coverage:strict": "vitest run --config vitest.config.ts --coverage --coverage.include=src/index.ts --coverage.thresholds.lines=95 --coverage.thresholds.functions=95 --coverage.thresholds.branches=95 --coverage.thresholds.statements=95",
+    "test:pack": "publint . && attw --pack . --profile esm-only"
+  },
+  "dependencies": {
+    "@ai-translate/core": "workspace:*",
+    "openai": "7.1.0",
+    "zod": "4.4.3"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

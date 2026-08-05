@@ -1,0 +1,78 @@
+{
+  "name": "@ai-translate/fs-json",
+  "version": "0.0.0",
+  "description": "Filesystem JSON catalog adapters, translation state stores, and candidate caches for ai-translate.",
+  "keywords": [
+    "i18n",
+    "l10n",
+    "internationalization",
+    "localization",
+    "translation",
+    "json",
+    "ai"
+  ],
+  "license": "MIT",
+  "author": "Thiago Peres",
+  "homepage": "https://github.com/thiagoperes/ai-translate/tree/main/packages/ai-translate-fs-json#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thiagoperes/ai-translate.git",
+    "directory": "packages/ai-translate-fs-json"
+  },
+  "bugs": {
+    "url": "https://github.com/thiagoperes/ai-translate/issues"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./bundle-json": {
+      "types": "./dist/bundle-json.d.mts",
+      "import": "./dist/bundle-json.mjs",
+      "default": "./dist/bundle-json.mjs"
+    },
+    "./document-json": {
+      "types": "./dist/document-json.d.mts",
+      "import": "./dist/document-json.mjs",
+      "default": "./dist/document-json.mjs"
+    },
+    "./namespace-json": {
+      "types": "./dist/namespace-json.d.mts",
+      "import": "./dist/namespace-json.mjs",
+      "default": "./dist/namespace-json.mjs"
+    },
+    "./state": {
+      "types": "./dist/state.d.mts",
+      "import": "./dist/state.mjs",
+      "default": "./dist/state.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "oxlint -c ../../.oxlintrc.json --deny-warnings src test vitest.config.ts tsdown.config.ts",
+    "test": "vitest run --config vitest.config.ts",
+    "coverage": "vitest run --config vitest.config.ts --coverage",
+    "test:pack": "publint . && attw --pack . --profile esm-only"
+  },
+  "dependencies": {
+    "@ai-translate/core": "workspace:*",
+    "globby": "16.2.2"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  }
+}

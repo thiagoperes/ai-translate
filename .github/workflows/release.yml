@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "packages/*/package.json"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+# Publishing only. Version changes and their pull requests are prepared
+# locally on branches and reviewed before they reach main. This workflow has
+# no pull-request permission and cannot create or update a pull request.
+#
+# Code quality (lint, typecheck, tests,
+# coverage, translate:check) is owned by the "Pull Request Quality Checks"
+# workflow, which already runs on every PR, merge group, and push to main —
+# duplicating it here doubled CI time on every push for no extra safety.
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v6
+        with:
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+          # npm trusted publishing requires npm >=11.5.1. Node 24.15.0 ships
+          # npm 11.12.1 and is part of this repository's supported engines.
+          node-version: 24.15.0
+          registry-url: "https://registry.npmjs.org"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r --filter './packages/*' build
+      - run: pnpm -r --filter './packages/*' test:pack
+      - run: pnpm release:publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"

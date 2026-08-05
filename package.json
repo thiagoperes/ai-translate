@@ -1,0 +1,50 @@
+{
+  "name": "ai-translate-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "author": "Thiago Peres",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thiagoperes/ai-translate.git"
+  },
+  "bugs": {
+    "url": "https://github.com/thiagoperes/ai-translate/issues"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r --filter './packages/*' build",
+    "prepare": "husky",
+    "typecheck": "pnpm -r --filter './packages/*' typecheck",
+    "lint": "pnpm -r --filter './packages/*' lint && oxlint -c .oxlintrc.json --deny-warnings scripts vitest.base.ts",
+    "test": "pnpm -r --filter './packages/*' test",
+    "coverage": "pnpm -r --parallel --filter '@ai-translate/cli' --filter '@ai-translate/core' --filter '@ai-translate/keystatic' --filter '@ai-translate/provider-openai' coverage:strict",
+    "test:pack": "pnpm -r --filter './packages/*' test:pack && node ./scripts/package-smoke.mjs",
+    "validate": "pnpm run build && pnpm run typecheck && pnpm run test && pnpm run test:pack",
+    "release:version": "changeset version",
+    "release:publish": "changeset publish"
+  },
+  "devDependencies": {
+    "@ai-translate/cli": "workspace:*",
+    "@ai-translate/core": "workspace:*",
+    "@ai-translate/fs-json": "workspace:*",
+    "@ai-translate/markdoc": "workspace:*",
+    "@ai-translate/provider-openai": "workspace:*",
+    "@arethetypeswrong/cli": "0.18.5",
+    "@changesets/changelog-github": "0.7.0",
+    "@changesets/cli": "2.31.1",
+    "@types/node": "26.1.2",
+    "@vitest/coverage-v8": "4.1.10",
+    "execa": "10.0.0",
+    "husky": "9.1.7",
+    "oxlint": "^1.76.0",
+    "publint": "0.3.22",
+    "tsdown": "0.22.14",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  },
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
+  },
+  "packageManager": "pnpm@10.32.1"
+}

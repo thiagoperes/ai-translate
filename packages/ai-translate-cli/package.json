@@ -1,0 +1,64 @@
+{
+  "name": "@ai-translate/cli",
+  "version": "0.0.0",
+  "description": "Command-line interface for ai-translate: validate, check, audit, and sync localized content generated from a single source locale.",
+  "keywords": [
+    "i18n",
+    "l10n",
+    "internationalization",
+    "localization",
+    "translation",
+    "cli",
+    "ai",
+    "llm"
+  ],
+  "license": "MIT",
+  "author": "Thiago Peres",
+  "homepage": "https://github.com/thiagoperes/ai-translate/tree/main/packages/ai-translate-cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thiagoperes/ai-translate.git",
+    "directory": "packages/ai-translate-cli"
+  },
+  "bugs": {
+    "url": "https://github.com/thiagoperes/ai-translate/issues"
+  },
+  "bin": {
+    "ai-translate": "./dist/bin.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "pnpm --dir ../.. exec oxlint -c .oxlintrc.json --deny-warnings packages/ai-translate-cli/src packages/ai-translate-cli/test packages/ai-translate-cli/vitest.config.ts packages/ai-translate-cli/tsdown.config.ts",
+    "test": "vitest run --config vitest.config.ts",
+    "coverage": "vitest run --config vitest.config.ts --coverage",
+    "coverage:strict": "vitest run --config vitest.config.ts --coverage --coverage.include=src/config.ts --coverage.thresholds.lines=95 --coverage.thresholds.functions=95 --coverage.thresholds.branches=95 --coverage.thresholds.statements=95",
+    "test:pack": "publint . && attw --pack . --profile esm-only"
+  },
+  "dependencies": {
+    "@ai-translate/core": "workspace:*",
+    "@ai-translate/fs-json": "workspace:*",
+    "dotenv": "17.4.2",
+    "jiti": "2.7.0"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  }
+}

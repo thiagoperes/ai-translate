@@ -1,0 +1,54 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "import", "vitest"],
+  "env": {
+    "node": true,
+    "es2024": true
+  },
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn"
+  },
+  "rules": {
+    "curly": "error",
+    "eqeqeq": "error",
+    "no-console": ["error", { "allow": ["warn", "error"] }],
+    "prefer-template": "error",
+
+    "import/no-unassigned-import": "off",
+    "vitest/require-mock-type-parameters": "off",
+    "vitest/require-to-throw-message": "off",
+    "unicorn/consistent-function-scoping": "off",
+
+    "typescript/consistent-type-definitions": ["error", "interface"],
+    "typescript/consistent-type-imports": [
+      "error",
+      { "prefer": "type-imports", "fixStyle": "inline-type-imports" }
+    ],
+    "typescript/no-explicit-any": "error",
+    "typescript/no-confusing-void-expression": "error",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/no-non-null-assertion": "error",
+    "typescript/require-await": "error",
+    "typescript/no-unused-vars": [
+      "error",
+      { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }
+    ],
+    "typescript/prefer-optional-chain": "error"
+  },
+  "overrides": [
+    {
+      "files": ["packages/ai-translate-cli/src/**/*.ts", "packages/ai-translate-cli/test/**/*.ts"],
+      "rules": {
+        "no-console": "off"
+      }
+    }
+  ],
+  "ignorePatterns": [
+    "**/coverage/**",
+    "**/dist/**",
+    "**/*.d.ts",
+    "node_modules/**"
+  ]
+}

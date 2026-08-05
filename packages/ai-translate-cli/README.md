@@ -1,0 +1,158 @@
+# @ai-translate/cli
+
+The `ai-translate` command line interface. It loads your config, runs a sync, check, or audit, and prints a JSON report.
+
+See the [project README](../../README.md) for what the toolkit does and how a sync decides what to translate.
+
+## Install
+
+```bash
+npm install --save-dev @ai-translate/cli
+```
+
+Requires Node 20.19 or newer.
+
+## Configuration
+
+The CLI looks for the first of these in the current working directory, unless you pass `--config`:
+
+```
+ai-translate.config.ts
+ai-translate.config.mts
+ai-translate.config.js
+ai-translate.config.mjs
+```
+
+TypeScript configs are loaded with [jiti](https://github.com/unjs/jiti), so no build step is needed. The file must default-export an object with at least `catalogs`, `provider`, `sourceLocale`, `state`, and `targetLocales`. Wrap it in `defineConfig` for type checking:
+
+```ts
+import { defineConfig } from "@ai-translate/cli";
+
+export default defineConfig({
+  sourceLocale: "en",
+  targetLocales: ["de", "fr"],
+  catalogs: [/* ... */],
+  state: /* ... */,
+  provider: /* ... */,
+});
+```
+
+The full config surface is documented as types in [`@ai-translate/core`](../ai-translate-core), on the `AiTranslateConfig` interface.
+
+### Environment variables
+
+Before every command the CLI loads, in order and without overriding anything already set in the environment:
+
+```
+.env
+.env.local
+.env.$NODE_ENV
+.env.$NODE_ENV.local
+```
+
+This is how a provider API key normally reaches your config, for example `apiKey: process.env.OPENAI_API_KEY`.
+
+## Commands
+
+### `sync`
+
+Translates everything that needs it, validates each candidate, runs semantic audits if configured, and writes the results.
+
+```bash
+ai-translate sync
+ai-translate sync --dry-run
+ai-translate sync --locale de --catalog messages
+```
+
+Writes happen inside a staged transaction: files and state are committed together only if the run converges, so an interrupted or failing sync leaves your content untouched. When semantic audits reject a translation, the run retries it up to `validation.semanticRepairAttempts` times before failing.
+
+Exits non-zero if any entry failed, if audits did not converge, or if a `--dry-run` exceeded the configured `validation.dryRunBudget`.
+
+### `check`
+
+The CI gate. Runs validation, a dry-run sync, and an audit provenance check, and refuses to write anything — the state store is swapped for a read-only snapshot for the duration.
+
+```bash
+ai-translate check
+ai-translate check --locale de
+```
+
+Exits non-zero if validation reports an error, if a sync would have work to do, or if audit provenance is missing or stale. The error message tells you which: run `ai-translate sync` for pending content, `ai-translate audit --refresh` for stale audits.
+
+### `validate`
+
+Structural and source-level validation with no provider calls. Reports source document counts, target locales, and any issues.
+
+```bash
+ai-translate validate
+```
+
+### `audit`
+
+Runs the configured semantic audits over existing translations.
+
+```bash
+ai-translate audit            # audit anything not already covered
+ai-translate audit --check    # verify stored provenance only, no provider calls
+ai-translate audit --refresh  # re-run audits even where provenance exists
+```
+
+### `new-locale <locale>`
+
+Scaffolds the files for a new locale and translates it, in a single transaction.
+
+```bash
+ai-translate new-locale pt
+ai-translate new-locale pt --from es --strategy copy-locale-and-retranslate
+```
+
+`--from` defaults to the source locale and `--strategy` to `copy-source`. Strategies are `copy-source`, `copy-locale`, `copy-locale-and-retranslate`, and `empty`; anything other than `copy-source` requires `--from` to be an already-translated locale. With `--dry-run`, only `--from <sourceLocale>` and `--strategy copy-source` are supported.
+
+### `scaffold-locale <locale> --from <locale>`
+
+Creates the files for a locale without translating anything. Defaults to `--strategy copy-locale`.
+
+### `migrate-state --from startup-v1`
+
+One-time import of a legacy `{ hashes, overrides }` lock file into translation state. Reads `script/translation-lock.json` unless you pass `--legacy-file`.
+
+## Flags
+
+| Flag | Commands | Meaning |
+| --- | --- | --- |
+| `--config <path>` | all | Path to the config file instead of auto-discovery. |
+| `--locale <locale>` | sync, check, audit, validate | Limit to a locale. Repeatable. |
+| `--catalog <id>` | sync, check, audit, validate | Limit to a catalog. Repeatable. |
+| `--unit <id>` | sync, check, audit, validate | Limit to a document unit. Repeatable. |
+| `--include-path <pointer>` | sync, check, audit, validate | Limit to exact JSON pointers; everything else is left untouched. Repeatable. |
+| `--dry-run` | sync, new-locale | Plan the work and report it without writing. |
+| `--force-retranslate` | sync | Retranslate the selected scope even when state is current. |
+| `--force-retranslate-path <pointer>` | sync | Force retranslation of specific pointers. Repeatable. |
+| `--max-pending-translations <n>` | sync, check | Abort before any provider call if the scope would translate more than `n` entries. |
+| `--check` | audit | Verify stored provenance without calling the provider. |
+| `--refresh` | audit | Re-run audits even where provenance already exists. |
+| `--from <locale>` | new-locale, scaffold-locale | Locale to seed from. |
+| `--strategy <strategy>` | new-locale, scaffold-locale | Scaffolding strategy. |
+| `--legacy-file <path>` | migrate-state | Path to the legacy lock file. |
+| `--help`, `-h` | | Print usage. |
+| `--version`, `-v` | | Print the version. |
+
+Flags accept both `--locale de` and `--locale=de`.
+
+## Output and exit codes
+
+Every command prints a JSON report to stdout — sync metrics, validation issues, audit counts — and errors to stderr. Exit code is `0` on success and `1` on any failure, which makes `ai-translate check` usable directly as a CI step.
+
+A dry-run sync also reports `pendingTranslationReasons`, a count of why each entry was selected. That is the fastest way to understand an unexpectedly large run.
+
+## Programmatic use
+
+```ts
+import { runCli, loadConfig, findConfigPath, defineConfig } from "@ai-translate/cli";
+
+const exitCode = await runCli(["sync", "--dry-run"], process.cwd());
+```
+
+## License
+
+MIT © Thiago Peres
