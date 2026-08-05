@@ -43,7 +43,26 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r --filter './packages/*' build
       - run: pnpm -r --filter './packages/*' test:pack
-      - run: pnpm release:publish
+      # `changeset publish` publishes whatever version is in the tree, and a
+      # package that has never been released still carries the placeholder
+      # 0.0.0. Without this guard the first push to main after adding an npm
+      # token would publish 0.0.0 for every package.
+      - id: guard
+        name: Refuse to publish placeholder versions
+        run: |
+          node -e '
+          const fs = require("node:fs");
+          const placeholder = fs
+            .readdirSync("packages")
+            .filter((dir) => fs.existsSync("packages/" + dir + "/package.json"))
+            .filter((dir) => JSON.parse(fs.readFileSync("packages/" + dir + "/package.json", "utf8")).version === "0.0.0");
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, "publish=" + (placeholder.length === 0) + "\n");
+          if (placeholder.length > 0) {
+            console.log("Skipping publish. Still at 0.0.0: " + placeholder.join(", ") + ". Run pnpm release:version first.");
+          }
+          '
+      - if: steps.guard.outputs.publish == 'true'
+        run: pnpm release:publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
