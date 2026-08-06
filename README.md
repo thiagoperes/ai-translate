@@ -59,7 +59,8 @@ Deterministic validation runs first, then optional semantic audits. A candidate 
 npm install --save-dev @ai-translate/cli @ai-translate/core @ai-translate/fs-json @ai-translate/provider-openai
 ```
 
-Requires Node 20.19 or newer (Node 22+ for `@ai-translate/provider-openai`).
+Requires Node 20.19 or newer. The provider packages need Node 22+, because the
+`openai` and `ai` SDKs they wrap do.
 
 ## Quickstart
 
@@ -80,6 +81,12 @@ Detected i18next:
 ```
 
 Use `--preview` to see the config without writing it, and `--integration <id>` if the project runs more than one library. Detection is read-only and never imports project code; see [`@ai-translate/next`](packages/ai-translate-next) to add your own integration.
+
+To generate a config that runs on a model other than OpenAI's, add `--provider ai-sdk` and name the AI SDK vendor package:
+
+```bash
+npx ai-translate init --provider ai-sdk --provider-package @ai-sdk/anthropic --model claude-sonnet-4
+```
 
 Suffix-keyed plurals are handled for you. English declares `items_one` and `items_other`; Polish files get `one`, `few`, `many`, and `other`, Japanese keeps just what it needs, and each added form is translated rather than left seeded in English.
 
@@ -123,6 +130,21 @@ export default defineConfig({
 });
 ```
 
+### Using a different model vendor
+
+Every prompt, batch, retry, and validation step is vendor-neutral; only the last hop to the model is not. Swap `@ai-translate/provider-openai` for `@ai-translate/provider-ai-sdk` and any [AI SDK](https://ai-sdk.dev) model works — Anthropic, Google, Bedrock, Groq, xAI, a gateway, or a local model:
+
+```ts
+import { anthropic } from "@ai-sdk/anthropic";
+import { createAiSdkTranslationProvider } from "@ai-translate/provider-ai-sdk";
+
+provider: createAiSdkTranslationProvider({
+  model: anthropic("claude-sonnet-4"),
+}),
+```
+
+Both packages are thin transports over the same engine in [`@ai-translate/provider-core`](packages/ai-translate-provider-core), so the generation contract, the repair loop, and the accepted-translation bookkeeping behave identically whichever you pick. Bringing your own vendor means implementing one method, `StructuredCompletionTransport.complete`.
+
 With `content/messages/en/*.json` in place, run `npx ai-translate sync`. Translated files land next to the source (`content/messages/de/*.json`) and state is written to `.ai-translate/`. Commit both — the state file is what makes the next run cheap.
 
 Then wire the gate into CI:
@@ -158,7 +180,9 @@ Every command accepts `--config` plus the scoping flags above. See the [CLI READ
 | [`@ai-translate/keystatic`](packages/ai-translate-keystatic) | Localized singleton paths and locale seeds for Keystatic. |
 | [`@ai-translate/message-formats`](packages/ai-translate-message-formats) | ICU and i18next message formats, plus CLDR plural key strategies. |
 | [`@ai-translate/next`](packages/ai-translate-next) | Next.js auto-discovery for next-intl and i18next, and config generation. |
+| [`@ai-translate/provider-core`](packages/ai-translate-provider-core) | The vendor-neutral generation engine: prompting, batching, repair, and the output contract. |
 | [`@ai-translate/provider-openai`](packages/ai-translate-provider-openai) | OpenAI translation and semantic-audit providers. |
+| [`@ai-translate/provider-ai-sdk`](packages/ai-translate-provider-ai-sdk) | The same providers over the Vercel AI SDK, for Anthropic, Google, Bedrock, or any AI SDK model. |
 
 Need a different format, a different model, or a different i18n library? `CatalogAdapter`, `TranslationProvider`, `SemanticAuditProvider`, `SyncStateStore`, `MessageFormat`, and `Integration` are plain interfaces, and everything shipped here is written against them.
 

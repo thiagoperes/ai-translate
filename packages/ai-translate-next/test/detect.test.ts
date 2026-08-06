@@ -347,6 +347,61 @@ describe("renderConfig", () => {
 
     expect(renderConfig(requireBest(await detectProject(root)).plan)).toContain("// TODO:");
   });
+
+  it("defaults to the OpenAI provider and the inexpensive reasoning model", async () => {
+    const root = await seedProject({
+      "package.json": JSON.stringify({ dependencies: { i18next: "23.0.0" } }),
+      "public/locales/en/common.json": MESSAGES,
+      "public/locales/pl/common.json": MESSAGES,
+    });
+
+    const config = renderConfig(requireBest(await detectProject(root)).plan);
+
+    expect(config).toContain(
+      'import { createOpenAiTranslationProvider } from "@ai-translate/provider-openai";',
+    );
+    expect(config).toContain("apiKey: process.env.OPENAI_API_KEY,");
+    expect(config).toContain('model: "gpt-5.6-luna",');
+  });
+
+  it("wires the AI SDK provider and the requested vendor factory", async () => {
+    const root = await seedProject({
+      "package.json": JSON.stringify({ dependencies: { i18next: "23.0.0" } }),
+      "public/locales/en/common.json": MESSAGES,
+      "public/locales/pl/common.json": MESSAGES,
+    });
+
+    const config = renderConfig(requireBest(await detectProject(root)).plan, {
+      model: "claude-sonnet-4",
+      provider: "ai-sdk",
+      providerPackage: "@ai-sdk/anthropic",
+    });
+
+    expect(config).toContain('import { anthropic } from "@ai-sdk/anthropic";');
+    expect(config).toContain(
+      'import { createAiSdkTranslationProvider } from "@ai-translate/provider-ai-sdk";',
+    );
+    expect(config).toContain('model: anthropic("claude-sonnet-4"),');
+    // The AI SDK provider reads credentials itself, so no key belongs here.
+    expect(config).not.toContain("apiKey:");
+    expect(config).not.toContain("provider-openai");
+  });
+
+  it("falls back to a neutral factory name for an unrecognised AI SDK package", async () => {
+    const root = await seedProject({
+      "package.json": JSON.stringify({ dependencies: { i18next: "23.0.0" } }),
+      "public/locales/en/common.json": MESSAGES,
+      "public/locales/pl/common.json": MESSAGES,
+    });
+
+    const config = renderConfig(requireBest(await detectProject(root)).plan, {
+      provider: "ai-sdk",
+      providerPackage: "@acme/ai-sdk-provider",
+    });
+
+    expect(config).toContain('import { model } from "@acme/ai-sdk-provider";');
+    expect(config).toContain('model: model("gpt-5.6-luna"),');
+  });
 });
 
 /**

@@ -196,9 +196,24 @@ describe("runInit", () => {
     const root = await seedProject(i18nextProject());
 
     expect((await runInit(root)).lines.join("\n")).toContain(
-      "Install: @ai-translate/cli @ai-translate/fs-json @ai-translate/provider-openai " +
-        "@ai-translate/message-formats",
+      "Install: @ai-translate/cli @ai-translate/fs-json @ai-translate/message-formats " +
+        "@ai-translate/provider-openai",
     );
+  });
+
+  it("lists the AI SDK packages when the config is generated for that provider", async () => {
+    const root = await seedProject(i18nextProject());
+
+    const { lines } = await runInit(root, {
+      provider: "ai-sdk",
+      providerPackage: "@ai-sdk/anthropic",
+    });
+
+    expect(lines.join("\n")).toContain(
+      "Install: @ai-translate/cli @ai-translate/fs-json @ai-translate/message-formats " +
+        "@ai-translate/provider-ai-sdk ai @ai-sdk/anthropic",
+    );
+    expect(lines.join("\n")).toContain("the API key your @ai-sdk/anthropic provider reads");
   });
 
   it("omits the install step once the packages are declared", async () => {

@@ -1,16 +1,19 @@
 {
-  "name": "@ai-translate/provider-openai",
+  "name": "@ai-translate/provider-ai-sdk",
   "version": "0.0.0",
-  "description": "OpenAI translation and semantic-audit providers for ai-translate, with structured output and batching.",
+  "description": "Run ai-translate against any AI SDK provider — OpenAI, Anthropic, Google, Bedrock, or a gateway — with one interchangeable translation and semantic-audit provider.",
   "keywords": [
     "i18n",
     "l10n",
     "internationalization",
     "localization",
     "translation",
-    "openai",
     "ai",
-    "llm"
+    "ai-sdk",
+    "vercel",
+    "llm",
+    "anthropic",
+    "openai"
   ],
   "license": "MIT",
   "author": "Thiago Peres",
@@ -18,7 +21,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/thiagoperes/ai-translate.git",
-    "directory": "packages/ai-translate-provider-openai"
+    "directory": "packages/ai-translate-provider-ai-sdk"
   },
   "bugs": {
     "url": "https://github.com/thiagoperes/ai-translate/issues"
@@ -47,14 +50,19 @@
     "lint": "oxlint -c ../../.oxlintrc.json --deny-warnings src test vitest.config.ts tsdown.config.ts",
     "test": "vitest run --config vitest.config.ts",
     "coverage": "vitest run --config vitest.config.ts --coverage",
-    "coverage:strict": "vitest run --config vitest.config.ts --coverage --coverage.include=src/index.ts --coverage.thresholds.lines=95 --coverage.thresholds.functions=95 --coverage.thresholds.branches=95 --coverage.thresholds.statements=95",
-    "test:pack": "publint . && attw --pack . --profile esm-only"
+    "test:pack": "publint . && attw --pack . --profile esm-only",
+    "coverage:strict": "vitest run --config vitest.config.ts --coverage --coverage.include=src/index.ts --coverage.thresholds.lines=95 --coverage.thresholds.functions=95 --coverage.thresholds.branches=95 --coverage.thresholds.statements=95"
   },
   "dependencies": {
     "@ai-translate/core": "workspace:*",
     "@ai-translate/provider-core": "workspace:*",
-    "openai": "7.1.0",
     "zod": "4.4.3"
+  },
+  "peerDependencies": {
+    "ai": "^6.0.0 || ^7.0.0"
+  },
+  "devDependencies": {
+    "ai": "7.0.48"
   },
   "engines": {
     "node": ">=22.0.0"

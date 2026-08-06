@@ -65,6 +65,22 @@ const workspaceAliases = [
     replacement: path.join(workspaceRoot, "packages/ai-translate-markdoc/src/$1.ts"),
   },
   {
+    find: /^@ai-translate\/provider-ai-sdk$/u,
+    replacement: path.join(workspaceRoot, "packages/ai-translate-provider-ai-sdk/src/index.ts"),
+  },
+  {
+    find: /^@ai-translate\/provider-ai-sdk\/(.+)$/u,
+    replacement: path.join(workspaceRoot, "packages/ai-translate-provider-ai-sdk/src/$1.ts"),
+  },
+  {
+    find: /^@ai-translate\/provider-core$/u,
+    replacement: path.join(workspaceRoot, "packages/ai-translate-provider-core/src/index.ts"),
+  },
+  {
+    find: /^@ai-translate\/provider-core\/(.+)$/u,
+    replacement: path.join(workspaceRoot, "packages/ai-translate-provider-core/src/$1.ts"),
+  },
+  {
     find: /^@ai-translate\/provider-openai$/u,
     replacement: path.join(workspaceRoot, "packages/ai-translate-provider-openai/src/index.ts"),
   },

@@ -5,21 +5,43 @@ import type {
   SemanticAuditRequest,
   SemanticAuditResponse,
 } from "@ai-translate/core/types";
-import type OpenAI from "openai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  createOpenAiSemanticAuditOutputContractRevision,
-  createOpenAiSemanticAuditProvider,
-  OPENAI_SEMANTIC_AUDIT_OUTPUT_CONTRACT_MATERIAL,
-  OpenAiSemanticAuditProvider,
+  createSemanticAuditOutputContractRevision,
+  createStructuredSemanticAuditProvider,
+  SEMANTIC_AUDIT_OUTPUT_CONTRACT_MATERIAL,
+  StructuredSemanticAuditProvider,
   type SemanticAuditResponseCache,
+  type StructuredCompletionRequest,
+  type StructuredCompletionTransport,
+  type StructuredSemanticAuditProviderOptions,
 } from "../src/index";
 
-type ParseImplementation = (
-  args: Record<string, unknown>,
-  options?: Record<string, unknown>,
-) => unknown | Promise<unknown>;
+type ParseImplementation = (args: StructuredCompletionRequest) => unknown | Promise<unknown>;
+
+/**
+ * Cases that stub `auditBatch` never reach a vendor. Handing them a transport
+ * that throws keeps that assumption enforced rather than implied.
+ */
+const unreachableTransport: StructuredCompletionTransport = {
+  complete(): never {
+    throw new Error("This provider stubs auditBatch and must not reach a transport.");
+  },
+  label: "OpenAI",
+};
+
+/** Mirrors how these cases read before the vendor transport was separable. */
+class TestSemanticAuditProvider extends StructuredSemanticAuditProvider {
+  constructor(
+    options: Omit<StructuredSemanticAuditProviderOptions, "transport"> & {
+      transport?: StructuredCompletionTransport;
+    } = {},
+  ) {
+    const { transport, ...rest } = options;
+    super({ ...rest, transport: transport ?? unreachableTransport });
+  }
+}
 
 function request(key: string, overrides: Partial<SemanticAuditRequest> = {}): SemanticAuditRequest {
   return {
@@ -74,18 +96,22 @@ function completion(parsed: unknown): unknown {
   return { choices: [{ message: { parsed } }] };
 }
 
-function createMockClient(implementation: ParseImplementation): {
-  client: OpenAI;
+function createMockTransport(implementation: ParseImplementation): {
   parse: ReturnType<typeof vi.fn<ParseImplementation>>;
+  transport: StructuredCompletionTransport;
 } {
   const parse = vi.fn<ParseImplementation>(implementation);
   return {
-    client: {
-      chat: {
-        completions: { parse },
-      },
-    } as unknown as OpenAI,
     parse,
+    transport: {
+      async complete(completionRequest: StructuredCompletionRequest): Promise<unknown> {
+        const response = (await parse(completionRequest)) as
+          | { choices?: { message?: { parsed?: unknown } }[] }
+          | undefined;
+        return response?.choices?.[0]?.message?.parsed;
+      },
+      label: "OpenAI",
+    },
   };
 }
 
@@ -104,9 +130,9 @@ function createMemorySemanticAuditCache() {
 }
 
 function audit(
-  provider: OpenAiSemanticAuditProvider,
+  provider: TestSemanticAuditProvider,
   requests: readonly SemanticAuditRequest[],
-  overrides: Partial<Parameters<OpenAiSemanticAuditProvider["audit"]>[0]> = {},
+  overrides: Partial<Parameters<TestSemanticAuditProvider["audit"]>[0]> = {},
 ) {
   return provider.audit({
     auditId: "claim-integrity",
@@ -121,7 +147,7 @@ function audit(
 
 function legacySemanticAuditCacheKey(
   semanticRequest: SemanticAuditRequest,
-  overrides: Partial<Parameters<OpenAiSemanticAuditProvider["audit"]>[0]> = {},
+  overrides: Partial<Parameters<TestSemanticAuditProvider["audit"]>[0]> = {},
 ): string {
   const material = JSON.stringify({
     auditId: overrides.auditId ?? "claim-integrity",
@@ -142,7 +168,7 @@ function legacySemanticAuditCacheKey(
 
 function semanticAuditCacheKey(
   semanticRequest: SemanticAuditRequest,
-  overrides: Partial<Parameters<OpenAiSemanticAuditProvider["audit"]>[0]> = {},
+  overrides: Partial<Parameters<TestSemanticAuditProvider["audit"]>[0]> = {},
 ): string {
   const material = JSON.stringify({
     auditId: overrides.auditId ?? "claim-integrity",
@@ -163,8 +189,8 @@ function semanticAuditCacheKey(
 function payloadAt(parse: ReturnType<typeof vi.fn<ParseImplementation>>, index: number) {
   const call = parse.mock.calls[index]?.[0] as {
     messages?: readonly { content: string; role: string }[];
-    model?: string;
-    reasoning_effort?: string;
+    modelId?: string;
+    reasoningEffort?: string;
     temperature?: number;
   };
   const user = call.messages?.find(({ role }) => role === "user");
@@ -190,39 +216,33 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("OpenAiSemanticAuditProvider", () => {
+describe("TestSemanticAuditProvider", () => {
   it("fingerprints audit output semantics without translation or transport plumbing", () => {
-    const baseline = createOpenAiSemanticAuditOutputContractRevision();
-    const { implementation } = OPENAI_SEMANTIC_AUDIT_OUTPUT_CONTRACT_MATERIAL;
+    const baseline = createSemanticAuditOutputContractRevision();
+    const { implementation } = SEMANTIC_AUDIT_OUTPUT_CONTRACT_MATERIAL;
     const changed = {
-      ...OPENAI_SEMANTIC_AUDIT_OUTPUT_CONTRACT_MATERIAL,
+      ...SEMANTIC_AUDIT_OUTPUT_CONTRACT_MATERIAL,
       implementation: {
         ...implementation,
         evidenceValidation: [...implementation.evidenceValidation, "changed evidence contract"],
       },
     };
 
-    expect(createOpenAiSemanticAuditOutputContractRevision(changed)).not.toBe(baseline);
-    expect(OPENAI_SEMANTIC_AUDIT_OUTPUT_CONTRACT_MATERIAL.responseFormat).toEqual(
+    expect(createSemanticAuditOutputContractRevision(changed)).not.toBe(baseline);
+    expect(SEMANTIC_AUDIT_OUTPUT_CONTRACT_MATERIAL.responseFormat).toEqual(
       expect.objectContaining({
-        json_schema: expect.objectContaining({
-          name: "ai_translate_semantic_audit",
-          strict: true,
-        }),
-        type: "json_schema",
+        additionalProperties: false,
+        required: ["audits"],
       }),
     );
-    expect(JSON.stringify(OPENAI_SEMANTIC_AUDIT_OUTPUT_CONTRACT_MATERIAL)).not.toMatch(
+    expect(JSON.stringify(SEMANTIC_AUDIT_OUTPUT_CONTRACT_MATERIAL)).not.toMatch(
       /buildSystemPrompt|coalesceTranslationBatch|semanticAuditCacheKey|waitBeforeRetry/u,
     );
   });
 
-  it("requires credentials and exposes a typed factory", async () => {
-    expect(() => new OpenAiSemanticAuditProvider()).toThrow(
-      "OpenAiSemanticAuditProvider requires either apiKey or client.",
-    );
-    const { client, parse } = createMockClient(() => completion({ audits: [] }));
-    const provider = createOpenAiSemanticAuditProvider({ client });
+  it("exposes a typed factory", async () => {
+    const { transport, parse } = createMockTransport(() => completion({ audits: [] }));
+    const provider = createStructuredSemanticAuditProvider({ transport });
     await expect(
       provider.audit({
         auditId: "claims",
@@ -237,9 +257,9 @@ describe("OpenAiSemanticAuditProvider", () => {
   });
 
   it("returns a fully validated cache hit without calling the model again", async () => {
-    const { client, parse } = createMockClient(() => completion({ audits: [item("a")] }));
+    const { transport, parse } = createMockTransport(() => completion({ audits: [item("a")] }));
     const { cache, get, put } = createMemorySemanticAuditCache();
-    const provider = new OpenAiSemanticAuditProvider({ cache, client });
+    const provider = new TestSemanticAuditProvider({ cache, transport });
 
     const first = await audit(provider, [request("a")]);
     const second = await audit(provider, [request("a")]);
@@ -251,9 +271,9 @@ describe("OpenAiSemanticAuditProvider", () => {
   });
 
   it("reuses a semantic cache entry across opaque and context-only identity changes", async () => {
-    const { client, parse } = createMockClient(() => completion({ audits: [item("first")] }));
+    const { transport, parse } = createMockTransport(() => completion({ audits: [item("first")] }));
     const { cache } = createMemorySemanticAuditCache();
-    const provider = new OpenAiSemanticAuditProvider({ cache, client });
+    const provider = new TestSemanticAuditProvider({ cache, transport });
 
     await audit(provider, [request("first", { requestDigest: "stable-request" })]);
     const second = await audit(provider, [
@@ -277,10 +297,10 @@ describe("OpenAiSemanticAuditProvider", () => {
       key: "legacy-correlation-key",
       modelId: "audit-forward-model",
     };
-    const { client, parse } = createMockClient(() => completion({ audits: [item("current")] }));
+    const { transport, parse } = createMockTransport(() => completion({ audits: [item("current")] }));
     const { cache, get, put, values } = createMemorySemanticAuditCache();
     values.set(legacyKey, cachedResponse);
-    const provider = new OpenAiSemanticAuditProvider({ cache, client });
+    const provider = new TestSemanticAuditProvider({ cache, transport });
 
     const first = await audit(provider, [semanticRequest]);
     const second = await audit(provider, [semanticRequest]);
@@ -308,12 +328,12 @@ describe("OpenAiSemanticAuditProvider", () => {
       key: "legacy-correlation-key",
       modelId: "audit-forward-model",
     };
-    const { client, parse } = createMockClient(() => completion({ audits: [item("current")] }));
+    const { transport, parse } = createMockTransport(() => completion({ audits: [item("current")] }));
     const { cache, get, put, values } = createMemorySemanticAuditCache();
     values.set(compatibleKey, cachedResponse);
-    const provider = new OpenAiSemanticAuditProvider({
+    const provider = new TestSemanticAuditProvider({
       cache,
-      client,
+      transport,
       compatiblePromptRevisions: { forward: ["forward-v2"] },
     });
 
@@ -346,12 +366,12 @@ describe("OpenAiSemanticAuditProvider", () => {
       key: "legacy-correlation-key",
       modelId: "audit-forward-model",
     };
-    const { client, parse } = createMockClient(() => completion({ audits: [item("current")] }));
+    const { transport, parse } = createMockTransport(() => completion({ audits: [item("current")] }));
     const { cache, get, put, values } = createMemorySemanticAuditCache();
     values.set(compatibleKey, invalidCachedResponse);
-    const provider = new OpenAiSemanticAuditProvider({
+    const provider = new TestSemanticAuditProvider({
       cache,
-      client,
+      transport,
       compatiblePromptRevisions: { forward: ["forward-v2"] },
     });
 
@@ -375,12 +395,12 @@ describe("OpenAiSemanticAuditProvider", () => {
       key: "legacy-correlation-key",
       modelId: "audit-forward-model",
     };
-    const { client, parse } = createMockClient(() => completion({ audits: [item("current")] }));
+    const { transport, parse } = createMockTransport(() => completion({ audits: [item("current")] }));
     const { cache, get, values } = createMemorySemanticAuditCache();
     values.set(forwardCompatibleKey, cachedResponse);
-    const provider = new OpenAiSemanticAuditProvider({
+    const provider = new TestSemanticAuditProvider({
       cache,
-      client,
+      transport,
       compatiblePromptRevisions: { forward: ["shared-v2"] },
     });
 
@@ -398,7 +418,7 @@ describe("OpenAiSemanticAuditProvider", () => {
   });
 
   it("requests only cache misses and restores the original request order", async () => {
-    const { client, parse } = createMockClient((args) => {
+    const { transport, parse } = createMockTransport((args) => {
       const messages = args.messages as readonly { content: string; role: string }[];
       const body = JSON.parse(messages[1]?.content ?? "{}") as {
         requests: readonly { key: string; sourceText: string; targetText: string }[];
@@ -417,7 +437,7 @@ describe("OpenAiSemanticAuditProvider", () => {
       });
     });
     const { cache } = createMemorySemanticAuditCache();
-    const provider = new OpenAiSemanticAuditProvider({ cache, client });
+    const provider = new TestSemanticAuditProvider({ cache, transport });
     const distinctRequest = request("a", {
       requirements: [
         { description: "Preserve every refundable-deposit qualifier.", id: "deposit" },
@@ -446,8 +466,8 @@ describe("OpenAiSemanticAuditProvider", () => {
       get: vi.fn(async () => invalidCachedResponse),
       put: vi.fn(async () => undefined),
     };
-    const { client, parse } = createMockClient(() => completion({ audits: [item("a")] }));
-    const provider = new OpenAiSemanticAuditProvider({ cache, client });
+    const { transport, parse } = createMockTransport(() => completion({ audits: [item("a")] }));
+    const provider = new TestSemanticAuditProvider({ cache, transport });
 
     await expect(audit(provider, [request("a")])).resolves.toEqual([
       { evaluations: [evaluation()], key: "a", modelId: "audit-forward-model" },
@@ -457,7 +477,7 @@ describe("OpenAiSemanticAuditProvider", () => {
   });
 
   it("invalidates cache keys for every model-visible semantic audit input", async () => {
-    const { client, parse } = createMockClient((args) => {
+    const { transport, parse } = createMockTransport((args) => {
       const messages = args.messages as readonly { content: string; role: string }[];
       const body = JSON.parse(messages[1]?.content ?? "{}") as {
         requests: readonly { key: string; sourceText: string; targetText: string }[];
@@ -476,7 +496,7 @@ describe("OpenAiSemanticAuditProvider", () => {
       });
     });
     const { cache, put } = createMemorySemanticAuditCache();
-    const provider = new OpenAiSemanticAuditProvider({ cache, client });
+    const provider = new TestSemanticAuditProvider({ cache, transport });
     const baseRequest = request("same");
 
     await audit(provider, [baseRequest]);
@@ -508,8 +528,8 @@ describe("OpenAiSemanticAuditProvider", () => {
         throw new Error("cache write failed");
       }),
     };
-    const { client, parse } = createMockClient(() => completion({ audits: [item("a")] }));
-    const provider = new OpenAiSemanticAuditProvider({ cache, client });
+    const { transport, parse } = createMockTransport(() => completion({ audits: [item("a")] }));
+    const provider = new TestSemanticAuditProvider({ cache, transport });
 
     await expect(audit(provider, [request("a")])).resolves.toEqual([
       { evaluations: [evaluation()], key: "a", modelId: "audit-forward-model" },
@@ -526,7 +546,7 @@ describe("OpenAiSemanticAuditProvider", () => {
       { description: "Preserve the deposit claim.", id: "claim-deposit" },
       { description: "Preserve separate approval.", id: "claim-approval" },
     ];
-    const { client, parse } = createMockClient(() => {
+    const { transport, parse } = createMockTransport(() => {
       const sent = payloadAt(parse, parse.mock.calls.length - 1).payload.requests;
       return completion({
         audits: Object.fromEntries(
@@ -548,8 +568,8 @@ describe("OpenAiSemanticAuditProvider", () => {
         ),
       });
     });
-    const provider = new OpenAiSemanticAuditProvider({
-      client,
+    const provider = new TestSemanticAuditProvider({
+      transport,
       maxRetries: 1,
       singleRequirementRequests: true,
     });
@@ -577,7 +597,7 @@ describe("OpenAiSemanticAuditProvider", () => {
   it("shares one request cap across simultaneous audit calls", async () => {
     let activeRequests = 0;
     let peakRequests = 0;
-    const { client, parse } = createMockClient(async (args) => {
+    const { transport, parse } = createMockTransport(async (args) => {
       activeRequests += 1;
       peakRequests = Math.max(peakRequests, activeRequests);
       try {
@@ -591,9 +611,9 @@ describe("OpenAiSemanticAuditProvider", () => {
         activeRequests -= 1;
       }
     });
-    const provider = new OpenAiSemanticAuditProvider({
+    const provider = new TestSemanticAuditProvider({
       batchSize: 1,
-      client,
+      transport,
       concurrentRequests: 2,
       maxRetries: 1,
     });
@@ -610,7 +630,7 @@ describe("OpenAiSemanticAuditProvider", () => {
     let activeRequests = 0;
     let activeAtRejection = -1;
     const startedKeys: string[] = [];
-    const { client } = createMockClient(async (args) => {
+    const { transport } = createMockTransport(async (args) => {
       const messages = args.messages as readonly { content: string; role: string }[];
       const body = JSON.parse(messages[1]?.content ?? "{}") as {
         requests: readonly { key: string }[];
@@ -628,9 +648,9 @@ describe("OpenAiSemanticAuditProvider", () => {
         activeRequests -= 1;
       }
     });
-    const provider = new OpenAiSemanticAuditProvider({
+    const provider = new TestSemanticAuditProvider({
       batchSize: 1,
-      client,
+      transport,
       concurrentRequests: 2,
       maxRetries: 1,
     });
@@ -650,17 +670,17 @@ describe("OpenAiSemanticAuditProvider", () => {
     expect(startedKeys).toEqual(["a", "b"]);
   });
 
-  it("enforces the configured timeout and disables SDK retries for injected clients", async () => {
-    const { client, parse } = createMockClient(() => completion({ audits: [item("a")] }));
-    const provider = new OpenAiSemanticAuditProvider({ client, requestTimeoutMs: 4_321 });
+  it("passes an abort signal to the transport", async () => {
+    const { transport, parse } = createMockTransport(() => completion({ audits: [item("a")] }));
+    const provider = new TestSemanticAuditProvider({ transport, requestTimeoutMs: 4_321 });
 
     await audit(provider, [request("a")]);
 
-    expect(parse.mock.calls[0]?.[1]).toEqual({ maxRetries: 0, timeout: 4_321 });
+    expect(parse.mock.calls[0]?.[0]?.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("uses independent forward and adversarial prompt contracts, revisions, and models", async () => {
-    const { client, parse } = createMockClient((args) => {
+    const { transport, parse } = createMockTransport((args) => {
       const messages = args.messages as readonly { content: string; role: string }[];
       const body = JSON.parse(messages[1]?.content ?? "{}") as {
         requests: readonly { key: string }[];
@@ -669,9 +689,9 @@ describe("OpenAiSemanticAuditProvider", () => {
     });
     const forwardPrompt = vi.fn(() => "Forward project contract.");
     const adversarialPrompt = vi.fn(() => "Adversarial project contract.");
-    const provider = new OpenAiSemanticAuditProvider({
+    const provider = new TestSemanticAuditProvider({
       adversarialPrompt,
-      client,
+      transport,
       forwardPrompt,
       reasoningEffort: "low",
       temperature: 0.2,
@@ -687,15 +707,15 @@ describe("OpenAiSemanticAuditProvider", () => {
     const forward = payloadAt(parse, 0);
     const adversarial = payloadAt(parse, 1);
     expect(forward.call).toMatchObject({
-      model: "audit-forward-model",
-      reasoning_effort: "low",
+      modelId: "audit-forward-model",
+      reasoningEffort: "low",
       temperature: 0.2,
     });
     expect(forward.system).toContain("Independently assess");
     expect(forward.system).toContain("Forward project contract.");
     expect(forward.system).toContain("untrusted JSON data envelope");
     expect(forward.payload).toMatchObject({ pass: "forward", promptRevision: "forward-v3" });
-    expect(adversarial.call.model).toBe("audit-adversarial-model");
+    expect(adversarial.call.modelId).toBe("audit-adversarial-model");
     expect(adversarial.system).toContain("Actively try to falsify");
     expect(adversarial.system).toContain("Adversarial project contract.");
     expect(adversarial.payload).toMatchObject({
@@ -711,14 +731,14 @@ describe("OpenAiSemanticAuditProvider", () => {
   });
 
   it("omits temperature by default for audit models that only support their model default", async () => {
-    const { client, parse } = createMockClient((args) => {
+    const { transport, parse } = createMockTransport((args) => {
       const messages = args.messages as readonly { content: string; role: string }[];
       const body = JSON.parse(messages[1]?.content ?? "{}") as {
         requests: readonly { key: string }[];
       };
       return completion({ audits: body.requests.map(({ key }) => item(key)) });
     });
-    const provider = new OpenAiSemanticAuditProvider({ client });
+    const provider = new TestSemanticAuditProvider({ transport });
 
     await audit(provider, [request("default-temperature")]);
 
@@ -726,7 +746,7 @@ describe("OpenAiSemanticAuditProvider", () => {
   });
 
   it("keeps analyzer-only context and target values out of provider payloads", async () => {
-    const { client, parse } = createMockClient(() =>
+    const { transport, parse } = createMockTransport(() =>
       completion({
         audits: [
           item("a", [
@@ -750,8 +770,8 @@ describe("OpenAiSemanticAuditProvider", () => {
         ],
       }),
     );
-    const provider = new OpenAiSemanticAuditProvider({
-      client,
+    const provider = new TestSemanticAuditProvider({
+      transport,
       forwardPrompt: "Use the approved semantic rubric.",
     });
 
@@ -797,7 +817,7 @@ describe("OpenAiSemanticAuditProvider", () => {
   });
 
   it("splits independently keyed requests by item and serialized character caps", async () => {
-    const { client, parse } = createMockClient((args) => {
+    const { transport, parse } = createMockTransport((args) => {
       const messages = args.messages as readonly { content: string; role: string }[];
       const body = JSON.parse(messages[1]?.content ?? "{}") as {
         requests: readonly { key: string; sourceText: string }[];
@@ -820,9 +840,9 @@ describe("OpenAiSemanticAuditProvider", () => {
         ),
       });
     });
-    const provider = new OpenAiSemanticAuditProvider({
+    const provider = new TestSemanticAuditProvider({
       batchSize: 10,
-      client,
+      transport,
       concurrentRequests: 1,
       maxCharsPerBatch: 900,
     });
@@ -841,8 +861,8 @@ describe("OpenAiSemanticAuditProvider", () => {
 
   it("uses compact aliases for long provenance keys and restores the original response key", async () => {
     const longKey = `acme-claim-qualifiers:es::messages::messages::/${"long-path/".repeat(8)}claim`;
-    const { client, parse } = createMockClient(() => completion({ audits: [item("k0")] }));
-    const provider = new OpenAiSemanticAuditProvider({ client });
+    const { transport, parse } = createMockTransport(() => completion({ audits: [item("k0")] }));
+    const provider = new TestSemanticAuditProvider({ transport });
 
     await expect(audit(provider, [request(longKey)])).resolves.toEqual([
       expect.objectContaining({ key: longKey }),
@@ -852,10 +872,10 @@ describe("OpenAiSemanticAuditProvider", () => {
 
   it("retries only a missing keyed item", async () => {
     vi.useFakeTimers();
-    const { client, parse } = createMockClient(() =>
+    const { transport, parse } = createMockTransport(() =>
       completion({ audits: parse.mock.calls.length === 1 ? [item("a")] : [item("b")] }),
     );
-    const provider = new OpenAiSemanticAuditProvider({ client, maxRetries: 2 });
+    const provider = new TestSemanticAuditProvider({ transport, maxRetries: 2 });
 
     const resultPromise = audit(provider, [request("a"), request("b")]);
     await vi.runAllTimersAsync();
@@ -869,12 +889,12 @@ describe("OpenAiSemanticAuditProvider", () => {
 
   it("retries only a duplicated keyed item", async () => {
     vi.useFakeTimers();
-    const { client, parse } = createMockClient(() =>
+    const { transport, parse } = createMockTransport(() =>
       completion({
         audits: parse.mock.calls.length === 1 ? [item("a"), item("a"), item("b")] : [item("a")],
       }),
     );
-    const provider = new OpenAiSemanticAuditProvider({ client, maxRetries: 2 });
+    const provider = new TestSemanticAuditProvider({ transport, maxRetries: 2 });
 
     const resultPromise = audit(provider, [request("a"), request("b")]);
     await vi.runAllTimersAsync();
@@ -888,7 +908,7 @@ describe("OpenAiSemanticAuditProvider", () => {
       { description: "Preserve deposit scope.", id: "deposit" },
       { description: "Preserve approval scope.", id: "approval" },
     ];
-    const { client, parse } = createMockClient(() => {
+    const { transport, parse } = createMockTransport(() => {
       if (parse.mock.calls.length === 1) {
         return completion({ audits: [item("a", [evaluation(), evaluation()]), item("b")] });
       }
@@ -896,7 +916,7 @@ describe("OpenAiSemanticAuditProvider", () => {
         ?.requirements[0]?.id;
       return completion({ audits: [item("a", [evaluation(requirementId)])] });
     });
-    const provider = new OpenAiSemanticAuditProvider({ client, maxRetries: 2 });
+    const provider = new TestSemanticAuditProvider({ transport, maxRetries: 2 });
 
     const resultPromise = audit(provider, [request("a", { requirements }), request("b")]);
     await vi.runAllTimersAsync();
@@ -913,7 +933,7 @@ describe("OpenAiSemanticAuditProvider", () => {
         evidence: [{ end: 4, field: "source", quote: "not present", start: 0 }],
       }),
     ]);
-    const { client, parse } = createMockClient(() => {
+    const { transport, parse } = createMockTransport(() => {
       const keys = payloadAt(parse, parse.mock.calls.length - 1).payload.requests.map(
         ({ key }) => key,
       );
@@ -924,7 +944,7 @@ describe("OpenAiSemanticAuditProvider", () => {
             : keys.map((key) => item(key)),
       });
     });
-    const provider = new OpenAiSemanticAuditProvider({ client, maxRetries: 2 });
+    const provider = new TestSemanticAuditProvider({ transport, maxRetries: 2 });
 
     const resultPromise = audit(provider, [request("a"), request("b"), request("c")]);
     await vi.runAllTimersAsync();
@@ -942,13 +962,13 @@ describe("OpenAiSemanticAuditProvider", () => {
         { end: 1, field: "target", quote: "K", start: 0 },
       ],
     });
-    const { client, parse } = createMockClient(() =>
+    const { transport, parse } = createMockTransport(() =>
       completion({
         audits:
           parse.mock.calls.length === 1 ? [item("a", [trivialEvidence]), item("b")] : [item("a")],
       }),
     );
-    const provider = new OpenAiSemanticAuditProvider({ client, maxRetries: 2 });
+    const provider = new TestSemanticAuditProvider({ transport, maxRetries: 2 });
 
     const resultPromise = audit(provider, [request("a"), request("b")]);
     await vi.runAllTimersAsync();
@@ -977,10 +997,10 @@ describe("OpenAiSemanticAuditProvider", () => {
         },
       ],
     });
-    const { client, parse } = createMockClient(() =>
+    const { transport, parse } = createMockTransport(() =>
       completion({ audits: [item("a", [mixedEvidence])] }),
     );
-    const provider = new OpenAiSemanticAuditProvider({ client });
+    const provider = new TestSemanticAuditProvider({ transport });
 
     await expect(audit(provider, [request("a")])).resolves.toHaveLength(1);
     expect(parse).toHaveBeenCalledTimes(1);
@@ -988,7 +1008,7 @@ describe("OpenAiSemanticAuditProvider", () => {
 
   it("adaptively splits a partially omitted group so bounded retries can converge", async () => {
     vi.useFakeTimers();
-    const { client, parse } = createMockClient(() => {
+    const { transport, parse } = createMockTransport(() => {
       const keys = payloadAt(parse, parse.mock.calls.length - 1).payload.requests.map(
         ({ key }) => key,
       );
@@ -996,7 +1016,7 @@ describe("OpenAiSemanticAuditProvider", () => {
         audits: parse.mock.calls.length === 1 ? [item("a")] : keys.map((key) => item(key)),
       });
     });
-    const provider = new OpenAiSemanticAuditProvider({ client, maxRetries: 2 });
+    const provider = new TestSemanticAuditProvider({ transport, maxRetries: 2 });
 
     const resultPromise = audit(provider, [
       request("a"),
@@ -1032,7 +1052,7 @@ describe("OpenAiSemanticAuditProvider", () => {
       description: `Preserve claim ${String(index)}.`,
       id: `claim-${String(index)}`,
     }));
-    const { client, parse } = createMockClient(() => {
+    const { transport, parse } = createMockTransport(() => {
       const sent = payloadAt(parse, parse.mock.calls.length - 1).payload.requests[0];
       const requirementIds = sent?.requirements.map(({ id }) => id) ?? [];
       return completion({
@@ -1046,7 +1066,7 @@ describe("OpenAiSemanticAuditProvider", () => {
         ],
       });
     });
-    const provider = new OpenAiSemanticAuditProvider({ client, maxRetries: 2 });
+    const provider = new TestSemanticAuditProvider({ transport, maxRetries: 2 });
 
     const resultPromise = audit(provider, [request("a", { requirements })]);
     await vi.runAllTimersAsync();
@@ -1073,7 +1093,7 @@ describe("OpenAiSemanticAuditProvider", () => {
       description: `Preserve claim ${String(index)}.`,
       id: `claim-${String(index)}`,
     }));
-    const { client, parse } = createMockClient(() => {
+    const { transport, parse } = createMockTransport(() => {
       const sent = payloadAt(parse, parse.mock.calls.length - 1).payload.requests[0];
       const requirementIds = sent?.requirements.map(({ id }) => id) ?? [];
       return completion({
@@ -1087,7 +1107,7 @@ describe("OpenAiSemanticAuditProvider", () => {
         ],
       });
     });
-    const provider = new OpenAiSemanticAuditProvider({ client, maxRetries: 2 });
+    const provider = new TestSemanticAuditProvider({ transport, maxRetries: 2 });
 
     const resultPromise = audit(provider, [request("a", { requirements })]);
     await vi.runAllTimersAsync();
@@ -1110,7 +1130,7 @@ describe("OpenAiSemanticAuditProvider", () => {
       description: `Preserve claim ${String(index)}.`,
       id: `claim-${String(index)}`,
     }));
-    const { client, parse } = createMockClient(() => {
+    const { transport, parse } = createMockTransport(() => {
       const sent = payloadAt(parse, parse.mock.calls.length - 1).payload.requests[0];
       const requirementIds = sent?.requirements.map(({ id }) => id) ?? [];
       return completion({
@@ -1130,7 +1150,7 @@ describe("OpenAiSemanticAuditProvider", () => {
         ],
       });
     });
-    const provider = new OpenAiSemanticAuditProvider({ client, maxRetries: 2 });
+    const provider = new TestSemanticAuditProvider({ transport, maxRetries: 2 });
 
     const resultPromise = audit(provider, [request("a", { requirements })]);
     await vi.runAllTimersAsync();
@@ -1159,10 +1179,10 @@ describe("OpenAiSemanticAuditProvider", () => {
         },
       ],
     });
-    const { client, parse } = createMockClient(() =>
+    const { transport, parse } = createMockTransport(() =>
       completion({ audits: [item("a", parse.mock.calls.length === 1 ? [sourceOnly] : undefined)] }),
     );
-    const provider = new OpenAiSemanticAuditProvider({ client, maxRetries: 2 });
+    const provider = new TestSemanticAuditProvider({ transport, maxRetries: 2 });
 
     const resultPromise = audit(provider, [request("a")]);
     await vi.runAllTimersAsync();
@@ -1185,10 +1205,10 @@ describe("OpenAiSemanticAuditProvider", () => {
       reason: "The target evidence was not established.",
       verdict: "ambiguous",
     });
-    const { client, parse } = createMockClient(() =>
+    const { transport, parse } = createMockTransport(() =>
       completion({ audits: [item("a", parse.mock.calls.length === 1 ? [sourceOnly] : undefined)] }),
     );
-    const provider = new OpenAiSemanticAuditProvider({ client, maxRetries: 2 });
+    const provider = new TestSemanticAuditProvider({ transport, maxRetries: 2 });
 
     const resultPromise = audit(provider, [request("a")]);
     await vi.runAllTimersAsync();
@@ -1199,8 +1219,8 @@ describe("OpenAiSemanticAuditProvider", () => {
 
   it("fails closed after bounded split retries when every keyed item stays omitted", async () => {
     vi.useFakeTimers();
-    const { client, parse } = createMockClient(() => completion({ audits: [] }));
-    const provider = new OpenAiSemanticAuditProvider({ client, maxRetries: 2 });
+    const { transport, parse } = createMockTransport(() => completion({ audits: [] }));
+    const provider = new TestSemanticAuditProvider({ transport, maxRetries: 2 });
 
     const resultPromise = audit(provider, [request("a"), request("b"), request("c"), request("d")]);
     const rejection = resultPromise.catch((error: unknown) => error);
@@ -1228,8 +1248,8 @@ describe("OpenAiSemanticAuditProvider", () => {
       description: `Preserve claim ${String(index)}.`,
       id: `claim-${String(index)}`,
     }));
-    const { client, parse } = createMockClient(() => completion({ audits: [] }));
-    const provider = new OpenAiSemanticAuditProvider({ client, maxRetries: 2 });
+    const { transport, parse } = createMockTransport(() => completion({ audits: [] }));
+    const provider = new TestSemanticAuditProvider({ transport, maxRetries: 2 });
 
     const rejection = audit(provider, [request("a", { requirements })]).catch(
       (error: unknown) => error,
@@ -1246,7 +1266,7 @@ describe("OpenAiSemanticAuditProvider", () => {
 
   it("retries a transient transport failure without multiplying the failed batch", async () => {
     vi.useFakeTimers();
-    const { client, parse } = createMockClient(() => {
+    const { transport, parse } = createMockTransport(() => {
       if (parse.mock.calls.length === 1) {
         throw Object.assign(new Error("rate limited"), { status: 429 });
       }
@@ -1255,7 +1275,7 @@ describe("OpenAiSemanticAuditProvider", () => {
       );
       return completion({ audits: keys.map((key) => item(key)) });
     });
-    const provider = new OpenAiSemanticAuditProvider({ client, maxRetries: 2 });
+    const provider = new TestSemanticAuditProvider({ transport, maxRetries: 2 });
 
     const resultPromise = audit(provider, [request("a"), request("b")]);
     await vi.runAllTimersAsync();
@@ -1270,7 +1290,7 @@ describe("OpenAiSemanticAuditProvider", () => {
     vi.useFakeTimers();
     let activeRetries = 0;
     let peakRetries = 0;
-    const { client, parse } = createMockClient(async () => {
+    const { transport, parse } = createMockTransport(async () => {
       if (parse.mock.calls.length === 1) {
         throw new Error("Request timed out.");
       }
@@ -1283,7 +1303,7 @@ describe("OpenAiSemanticAuditProvider", () => {
       activeRetries -= 1;
       return completion({ audits: keys.map((key) => item(key)) });
     });
-    const provider = new OpenAiSemanticAuditProvider({ client, maxRetries: 2 });
+    const provider = new TestSemanticAuditProvider({ transport, maxRetries: 2 });
 
     const resultPromise = audit(provider, [request("a"), request("b"), request("c")]);
     await vi.runAllTimersAsync();
@@ -1298,7 +1318,7 @@ describe("OpenAiSemanticAuditProvider", () => {
   it("persists completed siblings before a later retry fragment fails", async () => {
     vi.useFakeTimers();
     let failB = true;
-    const { client, parse } = createMockClient(() => {
+    const { transport, parse } = createMockTransport(() => {
       const keys = payloadAt(parse, parse.mock.calls.length - 1).payload.requests.map(
         ({ key }) => key,
       );
@@ -1311,7 +1331,7 @@ describe("OpenAiSemanticAuditProvider", () => {
       return completion({ audits: keys.map((key) => item(key)) });
     });
     const { cache, put } = createMemorySemanticAuditCache();
-    const provider = new OpenAiSemanticAuditProvider({ cache, client, maxRetries: 2 });
+    const provider = new TestSemanticAuditProvider({ cache, transport, maxRetries: 2 });
     const requests = [
       request("a"),
       request("b", {
@@ -1335,10 +1355,10 @@ describe("OpenAiSemanticAuditProvider", () => {
   });
 
   it("does not retry or split a non-retryable transport failure", async () => {
-    const { client, parse } = createMockClient(() => {
+    const { transport, parse } = createMockTransport(() => {
       throw Object.assign(new Error("bad request"), { status: 400 });
     });
-    const provider = new OpenAiSemanticAuditProvider({ client, maxRetries: 3 });
+    const provider = new TestSemanticAuditProvider({ transport, maxRetries: 3 });
 
     await expect(audit(provider, [request("a"), request("b")])).rejects.toThrow(
       "failed after 1 attempt(s); unresolved keys: a, b",
@@ -1348,7 +1368,7 @@ describe("OpenAiSemanticAuditProvider", () => {
 
   it("repairs arithmetic-only evidence offsets when the literal quote is unique", async () => {
     const uniqueQuote = "refundable";
-    const { client } = createMockClient(() =>
+    const { transport } = createMockTransport(() =>
       completion({
         audits: [
           item("a", [
@@ -1367,7 +1387,7 @@ describe("OpenAiSemanticAuditProvider", () => {
         ],
       }),
     );
-    const provider = new OpenAiSemanticAuditProvider({ client });
+    const provider = new TestSemanticAuditProvider({ transport });
 
     await expect(audit(provider, [request("a")])).resolves.toEqual([
       expect.objectContaining({
@@ -1390,7 +1410,7 @@ describe("OpenAiSemanticAuditProvider", () => {
     const sourceText = "Drivers can charge at every supported public station.";
     const targetText = "Fahrer können an jeder unterstützten öffentlichen Station laden.";
     const requirementId = "qualifier:scope:universal";
-    const { client } = createMockClient(() =>
+    const { transport } = createMockTransport(() =>
       completion({
         audits: [
           item("a", [
@@ -1414,7 +1434,7 @@ describe("OpenAiSemanticAuditProvider", () => {
         ],
       }),
     );
-    const provider = new OpenAiSemanticAuditProvider({ client, maxRetries: 1 });
+    const provider = new TestSemanticAuditProvider({ transport, maxRetries: 1 });
 
     await expect(
       audit(provider, [
@@ -1440,7 +1460,7 @@ describe("OpenAiSemanticAuditProvider", () => {
 
   it("repairs uniquely matching evidence with harmless case, spacing, and punctuation normalization", async () => {
     const sourceText = "No Refundable\u00a0Security–Deposit applies.";
-    const { client } = createMockClient(() =>
+    const { transport } = createMockTransport(() =>
       completion({
         audits: [
           item("a", [
@@ -1464,7 +1484,7 @@ describe("OpenAiSemanticAuditProvider", () => {
         ],
       }),
     );
-    const provider = new OpenAiSemanticAuditProvider({ client });
+    const provider = new TestSemanticAuditProvider({ transport });
 
     await expect(audit(provider, [request("a", { sourceText })])).resolves.toEqual([
       expect.objectContaining({
@@ -1491,7 +1511,7 @@ describe("OpenAiSemanticAuditProvider", () => {
       "Calculateur gratuit 2026 de voiture de société en Allemagne : coût net, geldwerter Vorteil, règles VE 1% et 0.25%, majoration trajets. Sans e-mail.";
     const sourceQuote = "1% and 0.25% EV rules";
     const targetQuote = "règles VE 1 % et 0,25 %";
-    const { client } = createMockClient(() =>
+    const { transport } = createMockTransport(() =>
       completion({
         audits: [
           item("a", [
@@ -1505,7 +1525,7 @@ describe("OpenAiSemanticAuditProvider", () => {
         ],
       }),
     );
-    const provider = new OpenAiSemanticAuditProvider({ client });
+    const provider = new TestSemanticAuditProvider({ transport });
 
     await expect(
       audit(provider, [
@@ -1540,7 +1560,7 @@ describe("OpenAiSemanticAuditProvider", () => {
     const actualTargetQuote = "30 000 €";
     const sourceStart = sourceText.indexOf(sourceQuote);
     const requirementId = "material-claim:pricing-terms:0";
-    const { client } = createMockClient(() =>
+    const { transport } = createMockTransport(() =>
       completion({
         audits: [
           item("a", [
@@ -1564,7 +1584,7 @@ describe("OpenAiSemanticAuditProvider", () => {
         ],
       }),
     );
-    const provider = new OpenAiSemanticAuditProvider({ client });
+    const provider = new TestSemanticAuditProvider({ transport });
 
     await expect(
       audit(provider, [
@@ -1601,7 +1621,7 @@ describe("OpenAiSemanticAuditProvider", () => {
     const sourceStart = sourceText.indexOf(sourceQuote);
     const targetStart = targetText.lastIndexOf(targetQuote);
     const requirementId = "material-claim:pricing-terms:0";
-    const { client } = createMockClient(() =>
+    const { transport } = createMockTransport(() =>
       completion({
         audits: [
           item("a", [
@@ -1625,7 +1645,7 @@ describe("OpenAiSemanticAuditProvider", () => {
         ],
       }),
     );
-    const provider = new OpenAiSemanticAuditProvider({ client, maxRetries: 1 });
+    const provider = new TestSemanticAuditProvider({ transport, maxRetries: 1 });
 
     await expect(
       audit(provider, [
@@ -1652,7 +1672,7 @@ describe("OpenAiSemanticAuditProvider", () => {
   it("does not equate ordinary numeric whitespace with decimal punctuation", async () => {
     const targetText = "La période couvre 2026 30 jours.";
     const modelTargetQuote = "2026,30 jours";
-    const { client } = createMockClient(() =>
+    const { transport } = createMockTransport(() =>
       completion({
         audits: [
           item("a", [
@@ -1676,7 +1696,7 @@ describe("OpenAiSemanticAuditProvider", () => {
         ],
       }),
     );
-    const provider = new OpenAiSemanticAuditProvider({ client, maxRetries: 1 });
+    const provider = new TestSemanticAuditProvider({ transport, maxRetries: 1 });
 
     await expect(
       audit(provider, [
@@ -1691,7 +1711,7 @@ describe("OpenAiSemanticAuditProvider", () => {
   it("does not repair locale-style numeric evidence when its normalized match is ambiguous", async () => {
     const targetText = "règles VE 1% et 0.25%; règles VE 1% et 0.25%";
     const targetQuote = "règles VE 1 % et 0,25 %";
-    const { client } = createMockClient(() =>
+    const { transport } = createMockTransport(() =>
       completion({
         audits: [
           item("a", [
@@ -1710,7 +1730,7 @@ describe("OpenAiSemanticAuditProvider", () => {
         ],
       }),
     );
-    const provider = new OpenAiSemanticAuditProvider({ client, maxRetries: 1 });
+    const provider = new TestSemanticAuditProvider({ transport, maxRetries: 1 });
 
     await expect(
       audit(provider, [
@@ -1728,7 +1748,7 @@ describe("OpenAiSemanticAuditProvider", () => {
     const sourceStart = sourceText.lastIndexOf("18%");
     const targetStart = targetText.lastIndexOf("18%");
     const requirementId = "material-claim:quantitative-fact:0";
-    const { client } = createMockClient(() =>
+    const { transport } = createMockTransport(() =>
       completion({
         audits: [
           item("a", [
@@ -1742,7 +1762,7 @@ describe("OpenAiSemanticAuditProvider", () => {
         ],
       }),
     );
-    const provider = new OpenAiSemanticAuditProvider({ client, maxRetries: 1 });
+    const provider = new TestSemanticAuditProvider({ transport, maxRetries: 1 });
 
     await expect(
       audit(provider, [
@@ -1776,7 +1796,7 @@ describe("OpenAiSemanticAuditProvider", () => {
     const sourceStart = sourceText.indexOf(sourceQuote);
     const targetStart = targetText.indexOf(targetQuote);
     const requirementId = "material-claim:quantitative-fact:0";
-    const { client } = createMockClient(() =>
+    const { transport } = createMockTransport(() =>
       completion({
         audits: [
           item("a", [
@@ -1800,7 +1820,7 @@ describe("OpenAiSemanticAuditProvider", () => {
         ],
       }),
     );
-    const provider = new OpenAiSemanticAuditProvider({ client });
+    const provider = new TestSemanticAuditProvider({ transport });
 
     await expect(
       audit(provider, [
@@ -1832,7 +1852,7 @@ describe("OpenAiSemanticAuditProvider", () => {
     const targetText = "Le taux applicable est de 18%.";
     const sourceStart = sourceText.indexOf("18%");
     const targetStart = targetText.indexOf("18%");
-    const { client } = createMockClient(() =>
+    const { transport } = createMockTransport(() =>
       completion({
         audits: [
           item("a", [
@@ -1846,7 +1866,7 @@ describe("OpenAiSemanticAuditProvider", () => {
         ],
       }),
     );
-    const provider = new OpenAiSemanticAuditProvider({ client });
+    const provider = new TestSemanticAuditProvider({ transport });
 
     await expect(
       audit(provider, [
@@ -1864,7 +1884,7 @@ describe("OpenAiSemanticAuditProvider", () => {
     const targetText = "<highlight>​Reduce el gasto hasta un 10%</highlight> al cambiar tarjetas";
     const sourceQuote = "Cut spend by up to 10% after switching cards";
     const targetQuote = "Reduce el gasto hasta un 10% al cambiar tarjetas";
-    const { client } = createMockClient(() =>
+    const { transport } = createMockTransport(() =>
       completion({
         audits: [
           item("a", [
@@ -1878,7 +1898,7 @@ describe("OpenAiSemanticAuditProvider", () => {
         ],
       }),
     );
-    const provider = new OpenAiSemanticAuditProvider({ client });
+    const provider = new TestSemanticAuditProvider({ transport });
 
     await expect(audit(provider, [request("a", { sourceText, targetText })])).resolves.toEqual([
       expect.objectContaining({
@@ -1902,7 +1922,7 @@ describe("OpenAiSemanticAuditProvider", () => {
 
   it("maps an unkeyed malformed item to the missing request without retrying valid siblings", async () => {
     vi.useFakeTimers();
-    const { client, parse } = createMockClient(() =>
+    const { transport, parse } = createMockTransport(() =>
       completion({
         audits:
           parse.mock.calls.length === 1
@@ -1910,7 +1930,7 @@ describe("OpenAiSemanticAuditProvider", () => {
             : [item("b")],
       }),
     );
-    const provider = new OpenAiSemanticAuditProvider({ client, maxRetries: 2 });
+    const provider = new TestSemanticAuditProvider({ transport, maxRetries: 2 });
 
     const resultPromise = audit(provider, [request("a"), request("b")]);
     await vi.runAllTimersAsync();
@@ -1919,20 +1939,20 @@ describe("OpenAiSemanticAuditProvider", () => {
   });
 
   it("fails closed when any item remains invalid and rejects unknown response keys", async () => {
-    const missingClient = createMockClient(() => completion({ audits: [item("a")] }));
-    const missingProvider = new OpenAiSemanticAuditProvider({
-      client: missingClient.client,
+    const missingClient = createMockTransport(() => completion({ audits: [item("a")] }));
+    const missingProvider = new TestSemanticAuditProvider({
+      transport: missingClient.transport,
       maxRetries: 1,
     });
     await expect(audit(missingProvider, [request("a"), request("b")])).rejects.toThrow(
       "unresolved keys: b",
     );
 
-    const unknownClient = createMockClient(() =>
+    const unknownClient = createMockTransport(() =>
       completion({ audits: [item("a"), item("injected")] }),
     );
-    const unknownProvider = new OpenAiSemanticAuditProvider({
-      client: unknownClient.client,
+    const unknownProvider = new TestSemanticAuditProvider({
+      transport: unknownClient.transport,
       maxRetries: 1,
     });
     await expect(audit(unknownProvider, [request("a")])).rejects.toThrow(
@@ -1968,8 +1988,8 @@ describe("OpenAiSemanticAuditProvider", () => {
     ];
 
     for (const testCase of cases) {
-      const { client } = createMockClient(() => completion(testCase.parsed));
-      const provider = new OpenAiSemanticAuditProvider({ client, maxRetries: 1 });
+      const { transport } = createMockTransport(() => completion(testCase.parsed));
+      const provider = new TestSemanticAuditProvider({ transport, maxRetries: 1 });
       await expect(audit(provider, testCase.requests ?? [request("a")])).rejects.toThrow(
         testCase.expected,
       );
@@ -1977,8 +1997,8 @@ describe("OpenAiSemanticAuditProvider", () => {
   });
 
   it("rejects duplicate input keys and requirement ids before making a request", async () => {
-    const { client, parse } = createMockClient(() => completion({ audits: [] }));
-    const provider = new OpenAiSemanticAuditProvider({ client });
+    const { transport, parse } = createMockTransport(() => completion({ audits: [] }));
+    const provider = new TestSemanticAuditProvider({ transport });
 
     await expect(audit(provider, [request("same"), request("same")])).rejects.toThrow(
       "empty or duplicate key",
@@ -2003,12 +2023,8 @@ describe("OpenAiSemanticAuditProvider", () => {
     expect(parse).not.toHaveBeenCalled();
   });
 
-  it("can construct the default OpenAI client from an API key", () => {
-    expect(() => new OpenAiSemanticAuditProvider({ apiKey: "sk-test" })).not.toThrow();
-  });
-
   it("rejects invalid execution limits and an oversized single request before calling OpenAI", async () => {
-    const { client, parse } = createMockClient(() => completion({ audits: [] }));
+    const { transport, parse } = createMockTransport(() => completion({ audits: [] }));
     for (const options of [
       { batchSize: 0 },
       { concurrentRequests: 0 },
@@ -2016,12 +2032,12 @@ describe("OpenAiSemanticAuditProvider", () => {
       { maxRetries: 0 },
       { requestTimeoutMs: 0 },
     ]) {
-      expect(() => new OpenAiSemanticAuditProvider({ client, ...options })).toThrow(
+      expect(() => new TestSemanticAuditProvider({ transport, ...options })).toThrow(
         "must be a positive integer",
       );
     }
 
-    const provider = new OpenAiSemanticAuditProvider({ client, maxCharsPerBatch: 100 });
+    const provider = new TestSemanticAuditProvider({ transport, maxCharsPerBatch: 100 });
     await expect(audit(provider, [request("oversized")])).rejects.toThrow(
       'request "oversized" exceeds maxCharsPerBatch',
     );

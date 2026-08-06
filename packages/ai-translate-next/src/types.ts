@@ -27,6 +27,25 @@ export interface IntegrationPlan {
   warnings: readonly string[];
 }
 
+/**
+ * Which provider package the generated config wires up.
+ *
+ * `openai` talks to OpenAI directly. `ai-sdk` routes through the AI SDK, which
+ * is what makes the model vendor a one-line change afterwards.
+ */
+export type ProviderChoice = "ai-sdk" | "openai";
+
+export interface RenderConfigOptions {
+  /** Model id written into the config. Defaults per provider. */
+  model?: string;
+  provider?: ProviderChoice;
+  /**
+   * AI SDK vendor package the model factory is imported from, for example
+   * `@ai-sdk/anthropic`. Ignored unless `provider` is `ai-sdk`.
+   */
+  providerPackage?: string;
+}
+
 export interface DetectedSetup {
   /** 0 to 1. Used only to rank candidates and to decide whether `init` can
    * proceed without the user naming an integration explicitly. */

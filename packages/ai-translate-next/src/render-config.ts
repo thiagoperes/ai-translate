@@ -1,4 +1,26 @@
-import type { IntegrationPlan } from "./types";
+import type { IntegrationPlan, RenderConfigOptions } from "./types";
+
+/** Inexpensive and reasoning-capable, matching the provider defaults. */
+const DEFAULT_MODEL = "gpt-5.6-luna";
+const DEFAULT_AI_SDK_PACKAGE = "@ai-sdk/openai";
+
+/**
+ * Maps an AI SDK vendor package to the factory it exports, so the generated
+ * config compiles as written instead of needing a lookup in vendor docs.
+ */
+function aiSdkFactory(providerPackage: string): string {
+  const known: Record<string, string> = {
+    "@ai-sdk/amazon-bedrock": "bedrock",
+    "@ai-sdk/anthropic": "anthropic",
+    "@ai-sdk/azure": "azure",
+    "@ai-sdk/google": "google",
+    "@ai-sdk/groq": "groq",
+    "@ai-sdk/mistral": "mistral",
+    "@ai-sdk/openai": "openai",
+    "@ai-sdk/xai": "xai",
+  };
+  return known[providerPackage] ?? "model";
+}
 
 const MESSAGE_FORMAT_IMPORTS: Record<IntegrationPlan["messageFormat"], string | null> = {
   i18next: "i18nextMessageFormat",
@@ -27,9 +49,13 @@ function localeList(locales: readonly string[]): string {
  * knowing anything about the surrounding codebase and can be edited by hand
  * afterwards.
  */
-export function renderConfig(plan: IntegrationPlan): string {
+export function renderConfig(plan: IntegrationPlan, options: RenderConfigOptions = {}): string {
   const messageFormatImport = MESSAGE_FORMAT_IMPORTS[plan.messageFormat];
   const usesPlurals = plan.catalog.plurals !== undefined;
+  const usesAiSdk = options.provider === "ai-sdk";
+  const model = options.model ?? DEFAULT_MODEL;
+  const providerPackage = options.providerPackage ?? DEFAULT_AI_SDK_PACKAGE;
+  const factoryName = aiSdkFactory(providerPackage);
 
   const fsJsonImports = [
     plan.catalog.kind === "document-json"
@@ -44,15 +70,27 @@ export function renderConfig(plan: IntegrationPlan): string {
   ];
 
   const imports = [
+    ...(usesAiSdk ? [`import { ${factoryName} } from ${quote(providerPackage)};`] : []),
     'import { defineConfig } from "@ai-translate/cli";',
     `import { ${fsJsonImports.join(", ")} } from "@ai-translate/fs-json";`,
     ...(messageFormatsImports.length === 0
       ? []
-      : [
-          `import { ${messageFormatsImports.join(", ")} } from "@ai-translate/message-formats";`,
-        ]),
-    'import { createOpenAiTranslationProvider } from "@ai-translate/provider-openai";',
+      : [`import { ${messageFormatsImports.join(", ")} } from "@ai-translate/message-formats";`]),
+    usesAiSdk
+      ? 'import { createAiSdkTranslationProvider } from "@ai-translate/provider-ai-sdk";'
+      : 'import { createOpenAiTranslationProvider } from "@ai-translate/provider-openai";',
   ];
+
+  // The AI SDK path keeps the model behind a vendor factory, so switching
+  // vendors later is an import change rather than a provider rewrite.
+  const provider = usesAiSdk
+    ? `createAiSdkTranslationProvider({
+    model: ${factoryName}(${quote(model)}),
+  })`
+    : `createOpenAiTranslationProvider({
+    apiKey: process.env.OPENAI_API_KEY,
+    model: ${quote(model)},
+  })`;
 
   const catalogOptions = [
     ...(messageFormatImport === null ? [] : [`messageFormat: ${messageFormatImport},`]),
@@ -83,10 +121,7 @@ ${warnings}export default defineConfig({
 ${catalogOptions.map((option) => `      ${option}`).join("\n")}
     }),
   ],
-  provider: createOpenAiTranslationProvider({
-    apiKey: process.env.OPENAI_API_KEY,
-    model: "gpt-5.6-luna",
-  }),
+  provider: ${provider},
   sourceLocale,
   state: createShardedJsonStateStore({ rootDir: process.cwd() }),
   targetLocales,

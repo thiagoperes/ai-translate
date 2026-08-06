@@ -16,6 +16,7 @@ import type {
   ValidationResult,
 } from "@ai-translate/core/types";
 import { importStartupV1State } from "@ai-translate/fs-json";
+import type { ProviderChoice } from "@ai-translate/next";
 
 import { loadConfig, loadEnvFiles } from "./config";
 import { runInit } from "./init";
@@ -38,7 +39,10 @@ interface CommandOptions {
   locales?: string[];
   integration?: string;
   maxPendingTranslations?: number;
+  model?: string;
   preview?: boolean;
+  provider?: string;
+  providerPackage?: string;
   refresh?: boolean;
   strategy?: CatalogScaffoldStrategy;
   unitIds?: string[];
@@ -50,10 +54,7 @@ interface ParsedCommand {
   positionals: string[];
 }
 
-function requireOptionValue(
-  optionName: string,
-  value: string | undefined
-): string {
+function requireOptionValue(optionName: string, value: string | undefined): string {
   if (value === undefined) {
     throw new Error(`Option "--${optionName}" requires a value.`);
   }
@@ -61,16 +62,19 @@ function requireOptionValue(
   return value;
 }
 
-function requireNonNegativeIntegerOption(
-  optionName: string,
-  value: string | undefined
-): number {
+function requireProviderChoice(value: string): ProviderChoice {
+  if (value !== "ai-sdk" && value !== "openai") {
+    throw new Error(`Option "--provider" accepts "openai" or "ai-sdk", not "${value}".`);
+  }
+
+  return value;
+}
+
+function requireNonNegativeIntegerOption(optionName: string, value: string | undefined): number {
   const rawValue = requireOptionValue(optionName, value);
   const parsedValue = Number(rawValue);
   if (!Number.isSafeInteger(parsedValue) || parsedValue < 0) {
-    throw new Error(
-      `Option "--${optionName}" requires a non-negative integer.`
-    );
+    throw new Error(`Option "--${optionName}" requires a non-negative integer.`);
   }
   return parsedValue;
 }
@@ -78,7 +82,7 @@ function requireNonNegativeIntegerOption(
 async function validateConfig(
   config: AiTranslateConfig,
   configPath: string,
-  options: SyncCatalogsOptions
+  options: SyncCatalogsOptions,
 ): Promise<ValidationResult> {
   const result = await validateCatalogs(config, options);
   return {
@@ -98,7 +102,7 @@ interface SemanticAuditConvergenceResult {
 function printSyncSummary(
   result: SyncResult,
   semanticAudit?: SemanticAuditResult,
-  semanticRepairRounds = 0
+  semanticRepairRounds = 0,
 ): void {
   const pendingTranslationReasons = summarizePendingTranslationReasons(result);
   const failedTranslationIssues = summarizeFailedTranslationIssues(result);
@@ -110,16 +114,12 @@ function printSyncSummary(
         ...(result.dryRun && Object.keys(pendingTranslationReasons).length > 0
           ? { pendingTranslationReasons }
           : {}),
-        ...(semanticAudit === undefined
-          ? {}
-          : { semanticAudit, semanticRepairRounds }),
-        ...(failedTranslationIssues === undefined
-          ? {}
-          : { failedTranslationIssues }),
+        ...(semanticAudit === undefined ? {} : { semanticAudit, semanticRepairRounds }),
+        ...(failedTranslationIssues === undefined ? {} : { failedTranslationIssues }),
       },
       null,
-      2
-    )
+      2,
+    ),
   );
 }
 
@@ -149,7 +149,7 @@ function summarizeFailedTranslationIssues(result: SyncResult):
         message: issue.message,
         path: document.path,
         unitId: document.unitId,
-      }))
+      })),
   );
   const counts: Record<string, number> = {};
   for (const issue of errors) {
@@ -159,36 +159,29 @@ function summarizeFailedTranslationIssues(result: SyncResult):
     counts: Object.fromEntries(
       Object.entries(counts).toSorted(
         ([leftCode, leftCount], [rightCode, rightCount]) =>
-          rightCount - leftCount || leftCode.localeCompare(rightCode)
-      )
+          rightCount - leftCount || leftCode.localeCompare(rightCode),
+      ),
     ),
     examples: errors.slice(0, 25),
   };
 }
 
-function summarizePendingTranslationReasons(
-  result: SyncResult
-): Record<string, number> {
+function summarizePendingTranslationReasons(result: SyncResult): Record<string, number> {
   const summary: Record<string, number> = {};
   for (const document of result.documents) {
-    for (const [reason, count] of Object.entries(
-      document.pendingTranslationReasons ?? {}
-    )) {
+    for (const [reason, count] of Object.entries(document.pendingTranslationReasons ?? {})) {
       summary[reason] = (summary[reason] ?? 0) + count;
     }
   }
   return Object.fromEntries(
     Object.entries(summary).toSorted(
       ([leftReason, leftCount], [rightReason, rightCount]) =>
-        rightCount - leftCount || leftReason.localeCompare(rightReason)
-    )
+        rightCount - leftCount || leftReason.localeCompare(rightReason),
+    ),
   );
 }
 
-function dryRunBudgetError(
-  config: AiTranslateConfig,
-  result: SyncResult
-): string | undefined {
+function dryRunBudgetError(config: AiTranslateConfig, result: SyncResult): string | undefined {
   if (!result.dryRun || config.validation?.dryRunBudget === undefined) {
     return undefined;
   }
@@ -199,16 +192,14 @@ function dryRunBudgetError(
   ) {
     return (
       `Translation dry-run planned ${String(
-        result.metrics.translatedEntries
+        result.metrics.translatedEntries,
       )} provider translations, ` +
-      `exceeding the configured budget of ${String(
-        budget.maxPendingTranslations
-      )}.`
+      `exceeding the configured budget of ${String(budget.maxPendingTranslations)}.`
     );
   }
   const reasons = summarizePendingTranslationReasons(result);
   const forbidden = (budget.forbiddenPendingTranslationReasons ?? []).filter(
-    (reason) => (reasons[reason] ?? 0) > 0
+    (reason) => (reasons[reason] ?? 0) > 0,
   );
   return forbidden.length === 0
     ? undefined
@@ -217,10 +208,7 @@ function dryRunBudgetError(
         .join(", ")}.`;
 }
 
-function assertDryRunBudget(
-  config: AiTranslateConfig,
-  result: SyncResult
-): void {
+function assertDryRunBudget(config: AiTranslateConfig, result: SyncResult): void {
   const error = dryRunBudgetError(config, result);
   if (error !== undefined) {
     throw new Error(error);
@@ -229,7 +217,7 @@ function assertDryRunBudget(
 
 async function convergeSemanticAudits(
   config: AiTranslateConfig,
-  options: SyncCatalogsOptions
+  options: SyncCatalogsOptions,
 ): Promise<SemanticAuditConvergenceResult> {
   let sync = await syncCatalogs(config, options);
   if (
@@ -262,7 +250,7 @@ async function convergeSemanticAudits(
 
 async function syncWithSemanticAuditConvergence(
   config: AiTranslateConfig,
-  options: SyncCatalogsOptions
+  options: SyncCatalogsOptions,
 ): Promise<SemanticAuditConvergenceResult> {
   if (options.dryRun === true) {
     return convergeSemanticAudits(config, options);
@@ -270,13 +258,11 @@ async function syncWithSemanticAuditConvergence(
   return runStagedCatalogTransaction(
     config,
     (stagedConfig) => convergeSemanticAudits(stagedConfig, options),
-    (result) => semanticAuditConvergenceError(result) === undefined
+    (result) => semanticAuditConvergenceError(result) === undefined,
   );
 }
 
-function semanticAuditConvergenceError(
-  result: SemanticAuditConvergenceResult
-): string | undefined {
+function semanticAuditConvergenceError(result: SemanticAuditConvergenceResult): string | undefined {
   if (result.sync.metrics.failedEntries > 0) {
     return "Sync completed with failed translation entries.";
   }
@@ -285,7 +271,7 @@ function semanticAuditConvergenceError(
   }
   if ((result.audit?.retranslate ?? 0) > 0) {
     return `Semantic audit rejected translations after ${String(
-      result.repairRounds
+      result.repairRounds,
     )} configured repair round(s).`;
   }
   if (result.audit?.issues.some((issue) => issue.severity === "error")) {
@@ -294,9 +280,7 @@ function semanticAuditConvergenceError(
   return undefined;
 }
 
-function assertSemanticAuditConvergence(
-  result: SemanticAuditConvergenceResult
-): void {
+function assertSemanticAuditConvergence(result: SemanticAuditConvergenceResult): void {
   const error = semanticAuditConvergenceError(result);
   if (error !== undefined) {
     throw new Error(error);
@@ -317,10 +301,7 @@ function buildSyncOptions(options: CommandOptions): SyncCatalogsOptions {
     syncOptions.forceRetranslate = options.forceRetranslate;
   }
 
-  if (
-    options.forceRetranslatePaths &&
-    options.forceRetranslatePaths.length > 0
-  ) {
+  if (options.forceRetranslatePaths && options.forceRetranslatePaths.length > 0) {
     syncOptions.forceRetranslate = true;
     syncOptions.forceRetranslatePaths = options.forceRetranslatePaths;
   }
@@ -346,7 +327,7 @@ function buildSyncOptions(options: CommandOptions): SyncCatalogsOptions {
 
 function projectStateLocales(
   state: SyncStateSnapshot,
-  locales: readonly string[] | undefined
+  locales: readonly string[] | undefined,
 ): SyncStateSnapshot {
   if (locales === undefined || locales.length === 0) {
     return state;
@@ -354,9 +335,7 @@ function projectStateLocales(
   const included = new Set(locales);
   return {
     entries: Object.fromEntries(
-      Object.entries(state.entries).filter(([, entry]) =>
-        included.has(entry.locale)
-      )
+      Object.entries(state.entries).filter(([, entry]) => included.has(entry.locale)),
     ),
     version: state.version,
   };
@@ -364,7 +343,7 @@ function projectStateLocales(
 
 function hasStoredSemanticAudits(state: SyncStateSnapshot): boolean {
   return Object.values(state.entries).some(
-    (entry) => Object.keys(entry.validationAudits ?? {}).length > 0
+    (entry) => Object.keys(entry.validationAudits ?? {}).length > 0,
   );
 }
 
@@ -384,7 +363,7 @@ async function scaffoldLocale(
   options: {
     fromLocale?: string;
     strategy?: CatalogScaffoldStrategy;
-  } = {}
+  } = {},
 ) {
   return Promise.all(
     config.catalogs.map(async (catalog) => {
@@ -393,15 +372,11 @@ async function scaffoldLocale(
       }
 
       return await catalog.scaffoldLocale({
-        ...(options.fromLocale === undefined
-          ? {}
-          : { fromLocale: options.fromLocale }),
+        ...(options.fromLocale === undefined ? {} : { fromLocale: options.fromLocale }),
         locale,
-        ...(options.strategy === undefined
-          ? {}
-          : { strategy: options.strategy }),
+        ...(options.strategy === undefined ? {} : { strategy: options.strategy }),
       });
-    })
+    }),
   );
 }
 
@@ -415,7 +390,7 @@ function printHelp(): void {
   console.log(`ai-translate
 
 Usage:
-  ai-translate init [--integration <next-intl|i18next>] [--preview] [--force]
+  ai-translate init [--integration <next-intl|i18next>] [--provider <openai|ai-sdk>] [--provider-package <@ai-sdk/...>] [--model <id>] [--preview] [--force]
   ai-translate validate [--config <path>]
   ai-translate check [--config <path>] [--locale <locale>] [--catalog <id>] [--unit <id>] [--include-path <json-pointer>] [--max-pending-translations <count>]
   ai-translate audit [--check] [--refresh] [--config <path>] [--locale <locale>] [--catalog <id>] [--unit <id>] [--include-path <json-pointer>]
@@ -487,9 +462,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
           options.forceRetranslate = true;
           break;
         case "force-retranslate-path":
-          (options.forceRetranslatePaths ??= []).push(
-            requireOptionValue(flag, nextValue)
-          );
+          (options.forceRetranslatePaths ??= []).push(requireOptionValue(flag, nextValue));
           if (inlineValue === undefined) {
             index += 1;
           }
@@ -501,9 +474,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
           }
           break;
         case "include-path":
-          (options.includePaths ??= []).push(
-            requireOptionValue(flag, nextValue)
-          );
+          (options.includePaths ??= []).push(requireOptionValue(flag, nextValue));
           if (inlineValue === undefined) {
             index += 1;
           }
@@ -520,14 +491,29 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
             index += 1;
           }
           break;
+        case "model":
+          options.model = requireOptionValue(flag, nextValue);
+          if (inlineValue === undefined) {
+            index += 1;
+          }
+          break;
         case "preview":
           options.preview = true;
           break;
+        case "provider":
+          options.provider = requireOptionValue(flag, nextValue);
+          if (inlineValue === undefined) {
+            index += 1;
+          }
+          break;
+        case "provider-package":
+          options.providerPackage = requireOptionValue(flag, nextValue);
+          if (inlineValue === undefined) {
+            index += 1;
+          }
+          break;
         case "max-pending-translations":
-          options.maxPendingTranslations = requireNonNegativeIntegerOption(
-            flag,
-            nextValue
-          );
+          options.maxPendingTranslations = requireNonNegativeIntegerOption(flag, nextValue);
           if (inlineValue === undefined) {
             index += 1;
           }
@@ -542,10 +528,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
           options.refresh = true;
           break;
         case "strategy": {
-          const strategy = requireOptionValue(
-            flag,
-            nextValue
-          ) as CatalogScaffoldStrategy;
+          const strategy = requireOptionValue(flag, nextValue) as CatalogScaffoldStrategy;
           options.strategy = strategy;
           if (inlineValue === undefined) {
             index += 1;
@@ -586,7 +569,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
 
 export async function runCli(
   argv: readonly string[] = process.argv.slice(2),
-  cwd: string = process.cwd()
+  cwd: string = process.cwd(),
 ): Promise<number> {
   try {
     const parsed = parseCommand(argv);
@@ -608,22 +591,22 @@ export async function runCli(
           ...(parsed.options.integration === undefined
             ? {}
             : { integration: parsed.options.integration }),
+          ...(parsed.options.model === undefined ? {} : { model: parsed.options.model }),
           preview: parsed.options.preview === true || parsed.options.dryRun === true,
+          ...(parsed.options.provider === undefined
+            ? {}
+            : { provider: requireProviderChoice(parsed.options.provider) }),
+          ...(parsed.options.providerPackage === undefined
+            ? {}
+            : { providerPackage: parsed.options.providerPackage }),
         });
         console.log(result.lines.join("\n"));
         return 0;
       }
       case "validate": {
         await loadEnvFiles(cwd);
-        const { config, configPath } = await loadConfig(
-          cwd,
-          parsed.options.config
-        );
-        const summary = await validateConfig(
-          config,
-          configPath,
-          buildSyncOptions(parsed.options)
-        );
+        const { config, configPath } = await loadConfig(cwd, parsed.options.config);
+        const summary = await validateConfig(config, configPath, buildSyncOptions(parsed.options));
         console.log(JSON.stringify(summary, null, 2));
         if (summary.issues.some((issue) => issue.severity === "error")) {
           throw new Error("Validation failed.");
@@ -632,10 +615,7 @@ export async function runCli(
       }
       case "check": {
         await loadEnvFiles(cwd);
-        const { config, configPath } = await loadConfig(
-          cwd,
-          parsed.options.config
-        );
+        const { config, configPath } = await loadConfig(cwd, parsed.options.config);
         const checkOptions: SyncCatalogsOptions = {
           ...buildSyncOptions(parsed.options),
           ...(process.env.AI_TRANSLATE_CHECK_SNAPSHOT_LOCK === "1"
@@ -647,33 +627,27 @@ export async function runCli(
         // superset, and check must narrow regardless of which store is wired up.
         const stateSnapshot = projectStateLocales(
           await config.state.load(
-            checkOptions.locales === undefined
-              ? undefined
-              : { locales: checkOptions.locales }
+            checkOptions.locales === undefined ? undefined : { locales: checkOptions.locales },
           ),
-          checkOptions.locales
+          checkOptions.locales,
         );
         const checkConfig: AiTranslateConfig = {
           ...config,
           state: {
             load: () => Promise.resolve(stateSnapshot),
             save: () =>
-              Promise.reject(
-                new Error("Translation check cannot persist translation state.")
-              ),
+              Promise.reject(new Error("Translation check cannot persist translation state.")),
             withLock: (operation) => config.state.withLock(operation),
           },
         };
         const needsSemanticAudit =
-          (checkConfig.semanticAudits?.length ?? 0) > 0 ||
-          hasStoredSemanticAudits(stateSnapshot);
-        const { auditResult, dryRunResult, validationResult } =
-          await withTranslationIssueCache(async () => {
-            const checkedValidation = await validateConfig(
-              checkConfig,
-              configPath,
-              { ...checkOptions, acceptedProvenanceFastPath: true }
-            );
+          (checkConfig.semanticAudits?.length ?? 0) > 0 || hasStoredSemanticAudits(stateSnapshot);
+        const { auditResult, dryRunResult, validationResult } = await withTranslationIssueCache(
+          async () => {
+            const checkedValidation = await validateConfig(checkConfig, configPath, {
+              ...checkOptions,
+              acceptedProvenanceFastPath: true,
+            });
             const checkedDryRun = await syncCatalogs(checkConfig, {
               ...checkOptions,
               dryRun: true,
@@ -689,18 +663,17 @@ export async function runCli(
               dryRunResult: checkedDryRun,
               validationResult: checkedValidation,
             };
-          });
+          },
+        );
         const hasValidationErrors = validationResult.issues.some(
-          (issue) => issue.severity === "error"
+          (issue) => issue.severity === "error",
         );
         const hasPendingSync =
           dryRunResult.metrics.changedDocuments > 0 ||
           dryRunResult.metrics.failedEntries > 0 ||
           dryRunResult.metrics.staleManualEntries > 0 ||
           dryRunResult.metrics.translatedEntries > 0;
-        const hasAuditErrors = auditResult.issues.some(
-          (issue) => issue.severity === "error"
-        );
+        const hasAuditErrors = auditResult.issues.some((issue) => issue.severity === "error");
 
         console.log(
           JSON.stringify(
@@ -710,17 +683,17 @@ export async function runCli(
               dryRun: dryRunResult.metrics,
             },
             null,
-            2
-          )
+            2,
+          ),
         );
         if (hasValidationErrors || hasPendingSync || hasAuditErrors) {
           if (hasAuditErrors && !hasValidationErrors && !hasPendingSync) {
             throw new Error(
-              "Translation check failed because semantic audit provenance is missing, stale, or unresolved. Run ai-translate audit --refresh."
+              "Translation check failed because semantic audit provenance is missing, stale, or unresolved. Run ai-translate audit --refresh.",
             );
           }
           throw new Error(
-            "Translation check failed. Run ai-translate sync to reconcile localized content."
+            "Translation check failed. Run ai-translate sync to reconcile localized content.",
           );
         }
         return 0;
@@ -738,7 +711,7 @@ export async function runCli(
           throw new Error(
             parsed.options.auditCheck
               ? "Semantic audit check failed. Run ai-translate audit --refresh."
-              : "Semantic audit completed with unresolved or unsafe translations."
+              : "Semantic audit completed with unresolved or unsafe translations.",
           );
         }
         return 0;
@@ -753,10 +726,7 @@ export async function runCli(
          * acceptance provenance; `check` has always deduplicated that pair.
          */
         const result = await withTranslationIssueCache(() =>
-          syncWithSemanticAuditConvergence(
-            config,
-            buildSyncOptions(parsed.options)
-          )
+          syncWithSemanticAuditConvergence(config, buildSyncOptions(parsed.options)),
         );
         printSyncSummary(result.sync, result.audit, result.repairRounds);
         assertDryRunBudget(config, result.sync);
@@ -766,9 +736,7 @@ export async function runCli(
       case "new-locale": {
         const locale = parsed.positionals[0];
         if (!locale) {
-          throw new Error(
-            'The "new-locale" command requires a <locale> argument.'
-          );
+          throw new Error('The "new-locale" command requires a <locale> argument.');
         }
 
         await loadEnvFiles(cwd);
@@ -778,19 +746,19 @@ export async function runCli(
 
         if (parsed.options.dryRun && fromLocale !== config.sourceLocale) {
           throw new Error(
-            'The "new-locale" command only supports --from <sourceLocale> when used with --dry-run.'
+            'The "new-locale" command only supports --from <sourceLocale> when used with --dry-run.',
           );
         }
 
         if (parsed.options.dryRun && strategy !== "copy-source") {
           throw new Error(
-            'The "new-locale" command only supports --strategy copy-source when used with --dry-run.'
+            'The "new-locale" command only supports --strategy copy-source when used with --dry-run.',
           );
         }
 
         if (strategy !== "copy-source" && fromLocale === config.sourceLocale) {
           throw new Error(
-            `The "${strategy}" strategy requires --from <locale> to be a translated locale.`
+            `The "${strategy}" strategy requires --from <locale> to be a translated locale.`,
           );
         }
 
@@ -807,22 +775,14 @@ export async function runCli(
           : await runStagedCatalogTransaction(
               config,
               async (stagedConfig) => {
-                const scaffoldResults = await scaffoldLocale(
-                  stagedConfig,
-                  locale,
-                  {
-                    fromLocale,
-                    strategy,
-                  }
-                );
-                const result = await convergeSemanticAudits(
-                  stagedConfig,
-                  syncOptions
-                );
+                const scaffoldResults = await scaffoldLocale(stagedConfig, locale, {
+                  fromLocale,
+                  strategy,
+                });
+                const result = await convergeSemanticAudits(stagedConfig, syncOptions);
                 return { result, scaffoldResults };
               },
-              ({ result }) =>
-                semanticAuditConvergenceError(result) === undefined
+              ({ result }) => semanticAuditConvergenceError(result) === undefined,
             );
         const { result, scaffoldResults } = transaction;
         console.log(
@@ -840,14 +800,11 @@ export async function runCli(
                     semanticRepairRounds: result.repairRounds,
                   }),
               strategy,
-              status:
-                semanticAuditConvergenceError(result) === undefined
-                  ? "ok"
-                  : "failed",
+              status: semanticAuditConvergenceError(result) === undefined ? "ok" : "failed",
             },
             null,
-            2
-          )
+            2,
+          ),
         );
         assertSemanticAuditConvergence(result);
         return 0;
@@ -855,15 +812,11 @@ export async function runCli(
       case "scaffold-locale": {
         const locale = parsed.positionals[0];
         if (!locale) {
-          throw new Error(
-            'The "scaffold-locale" command requires a <locale> argument.'
-          );
+          throw new Error('The "scaffold-locale" command requires a <locale> argument.');
         }
 
         if (!parsed.options.from) {
-          throw new Error(
-            'The "scaffold-locale" command requires --from <locale>.'
-          );
+          throw new Error('The "scaffold-locale" command requires --from <locale>.');
         }
 
         await loadEnvFiles(cwd);
@@ -882,16 +835,14 @@ export async function runCli(
               status: "ok",
             },
             null,
-            2
-          )
+            2,
+          ),
         );
         return 0;
       }
       case "migrate-state": {
         if (parsed.options.from !== "startup-v1") {
-          throw new Error(
-            'The "migrate-state" command currently only supports --from startup-v1.'
-          );
+          throw new Error('The "migrate-state" command currently only supports --from startup-v1.');
         }
 
         await loadEnvFiles(cwd);
@@ -910,8 +861,8 @@ export async function runCli(
               status: "ok",
             },
             null,
-            2
-          )
+            2,
+          ),
         );
         return 0;
       }
@@ -920,9 +871,7 @@ export async function runCli(
     }
   } catch (error) {
     console.error(
-      error instanceof Error
-        ? error.message
-        : `Unexpected CLI failure: ${String(error)}`
+      error instanceof Error ? error.message : `Unexpected CLI failure: ${String(error)}`,
     );
     return 1;
   }
