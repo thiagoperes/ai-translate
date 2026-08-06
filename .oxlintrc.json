@@ -43,6 +43,12 @@
       "rules": {
         "no-console": "off"
       }
+    },
+    {
+      "files": ["bench/**/*.mjs"],
+      "rules": {
+        "no-console": "off"
+      }
     }
   ],
   "ignorePatterns": [

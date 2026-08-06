@@ -1,0 +1,25 @@
+{
+  "corpus": "synthetic scale=0.25",
+  "locales": 15,
+  "save": {
+    "elapsedMs": 422.800917
+  },
+  "scopedLoad": {
+    "count": 4116,
+    "elapsedMs": 39.50454200000013,
+    "retainedBytes": 2201760,
+    "locales": [
+      "da"
+    ]
+  },
+  "shards": {
+    "files": 84,
+    "gzip": 4756098,
+    "raw": 10766085
+  },
+  "fullLoad": {
+    "count": 61740,
+    "elapsedMs": 139.04925000000003,
+    "retainedBytes": 25294560
+  }
+}

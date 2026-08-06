@@ -9,6 +9,7 @@ import type {
   SemanticAuditEvaluation,
   SemanticAuditProvenance,
   SyncStateEntry,
+  SyncStateLoadScope,
   SyncStateOrigin,
   SyncStateSnapshot,
   SyncStateStatus,
@@ -216,6 +217,70 @@ function unpackTimestamp(value: unknown): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Per-load scratch space.
+ *
+ * Decoding is memoised only for fields whose cardinality is known to sit far
+ * below the record count. On a real 246k-record corpus there are 18 distinct
+ * generation revisions, 170 context digests and 12k source digests, but 173k
+ * distinct target digests and 198k distinct accepted contract revisions.
+ * Pooling those unique-per-record fields would pay map overhead for no dedup,
+ * so they deliberately keep using the uncached decoder.
+ */
+interface ShardLoadContext {
+  readonly compactStrings: Map<string, string>;
+  /** `undefined` means "no narrowing"; an empty scope must not hide entries. */
+  readonly locales: ReadonlySet<string> | undefined;
+  readonly timestamps: Map<number, string>;
+}
+
+function createShardLoadContext(scope: SyncStateLoadScope | undefined): ShardLoadContext {
+  const locales = scope?.locales;
+  return {
+    compactStrings: new Map(),
+    locales: locales === undefined || locales.length === 0 ? undefined : new Set(locales),
+    timestamps: new Map(),
+  };
+}
+
+function includesLocale(context: ShardLoadContext, locale: string): boolean {
+  return context.locales === undefined || context.locales.has(locale);
+}
+
+function decodePooledCompactString(context: ShardLoadContext, value: unknown): string | null {
+  if (typeof value !== "string") {
+    return decodeCompactString(value);
+  }
+  const pooled = context.compactStrings.get(value);
+  if (pooled !== undefined) {
+    return pooled;
+  }
+  const decoded = decodeCompactString(value);
+  if (decoded !== null) {
+    context.compactStrings.set(value, decoded);
+  }
+  return decoded;
+}
+
+/**
+ * Also avoids re-running `new Date(...).toISOString()` per record: the real
+ * corpus repeats 246k timestamps across 89k distinct values.
+ */
+function unpackPooledTimestamp(context: ShardLoadContext, value: unknown): string | null {
+  if (typeof value !== "number") {
+    return unpackTimestamp(value);
+  }
+  const pooled = context.timestamps.get(value);
+  if (pooled !== undefined) {
+    return pooled;
+  }
+  const unpacked = unpackTimestamp(value);
+  if (unpacked !== null) {
+    context.timestamps.set(value, unpacked);
+  }
+  return unpacked;
 }
 
 function canonicalizeJsonValue(value: unknown): unknown {
@@ -764,6 +829,7 @@ async function readShard(shardPath: string): Promise<ShardFile | null> {
 function loadEntriesFromShardV1(
   shard: ShardFileV1,
   shardPath: string,
+  context: ShardLoadContext,
 ): Record<string, SyncStateEntry> {
   const entries: Record<string, SyncStateEntry> = {};
   const catalogId = shard.catalogId ?? undefined;
@@ -782,6 +848,9 @@ function loadEntriesFromShardV1(
         throw new Error(
           `Invalid ai-translate shard locale record at ${shardPath}:${pointer}:${locale}.`,
         );
+      }
+      if (!includesLocale(context, locale)) {
+        continue;
       }
 
       const entry = buildEntryFromShardRecord({
@@ -813,6 +882,7 @@ function invalidPackedRecord(shardPath: string, pointer: unknown, locale: unknow
 function loadEntriesFromShardV2(
   shard: ShardFileV2,
   shardPath: string,
+  context: ShardLoadContext,
 ): Record<string, SyncStateEntry> {
   const entries: Record<string, SyncStateEntry> = {};
   const catalogId = shard.c ?? undefined;
@@ -828,9 +898,11 @@ function loadEntriesFromShardV2(
       );
     }
     pointers.add(pointer);
-    const sourceDigest = decodeCompactString(packedSourceDigest);
+    const sourceDigest = decodePooledCompactString(context, packedSourceDigest);
     const contextDigest =
-      packedContextDigest === null ? undefined : decodeCompactString(packedContextDigest);
+      packedContextDigest === null
+        ? undefined
+        : decodePooledCompactString(context, packedContextDigest);
     if (sourceDigest === null || contextDigest === null) {
       throw new Error(`Invalid ai-translate shard entry bucket at ${shardPath}:${pointer}.`);
     }
@@ -855,14 +927,20 @@ function loadEntriesFromShardV2(
         throw invalidPackedRecord(shardPath, pointer, locale);
       }
       locales.add(locale);
+      // Structural checks above still run for every record so a scoped load
+      // cannot mask shard corruption. Only the expensive decode and entry
+      // allocation below are skipped.
+      if (!includesLocale(context, locale)) {
+        continue;
+      }
       const targetDigest = decodeCompactString(packedTargetDigest);
-      const updatedAt = unpackTimestamp(packedUpdatedAt);
+      const updatedAt = unpackPooledTimestamp(context, packedUpdatedAt);
       const acceptedContractRevision =
         packedAcceptedRevision === null ? undefined : decodeCompactString(packedAcceptedRevision);
       const generationRevision =
         packedGenerationRevision === null
           ? undefined
-          : decodeCompactString(packedGenerationRevision);
+          : decodePooledCompactString(context, packedGenerationRevision);
       const flags = unpackRecordFlags(packedFlags);
       if (
         targetDigest === null ||
@@ -882,7 +960,7 @@ function loadEntriesFromShardV2(
         const packedContextOverride = packedRecord[7];
         const packedValidationAudits = packedRecord[8];
         if (packedSourceOverride !== null) {
-          const decoded = decodeCompactString(packedSourceOverride);
+          const decoded = decodePooledCompactString(context, packedSourceOverride);
           if (decoded === null) {
             throw invalidPackedRecord(shardPath, pointer, locale);
           }
@@ -891,7 +969,7 @@ function loadEntriesFromShardV2(
         if (packedContextOverride === false) {
           recordContextDigest = undefined;
         } else if (packedContextOverride !== null) {
-          const decoded = decodeCompactString(packedContextOverride);
+          const decoded = decodePooledCompactString(context, packedContextOverride);
           if (decoded === null) {
             throw invalidPackedRecord(shardPath, pointer, locale);
           }
@@ -936,10 +1014,14 @@ function loadEntriesFromShardV2(
   return entries;
 }
 
-function loadEntriesFromShard(shard: ShardFile, shardPath: string): Record<string, SyncStateEntry> {
+function loadEntriesFromShard(
+  shard: ShardFile,
+  shardPath: string,
+  context: ShardLoadContext,
+): Record<string, SyncStateEntry> {
   return isShardFileV1(shard)
-    ? loadEntriesFromShardV1(shard, shardPath)
-    : loadEntriesFromShardV2(shard, shardPath);
+    ? loadEntriesFromShardV1(shard, shardPath, context)
+    : loadEntriesFromShardV2(shard, shardPath, context);
 }
 
 async function migrateLegacyMonolithicState(args: {
@@ -1072,9 +1154,31 @@ async function syncDirectoryTree(root: string): Promise<void> {
   }
 }
 
-async function loadFromShards(shardsDir: string): Promise<SyncStateSnapshot> {
+function projectSnapshotLocales(
+  snapshot: SyncStateSnapshot,
+  scope: SyncStateLoadScope | undefined,
+): SyncStateSnapshot {
+  const locales = scope?.locales;
+  if (locales === undefined || locales.length === 0) {
+    return snapshot;
+  }
+  const included = new Set(locales);
+  const entries: Record<string, SyncStateEntry> = {};
+  for (const [key, entry] of Object.entries(snapshot.entries)) {
+    if (included.has(entry.locale)) {
+      entries[key] = entry;
+    }
+  }
+  return { entries, version: snapshot.version };
+}
+
+async function loadFromShards(
+  shardsDir: string,
+  scope?: SyncStateLoadScope,
+): Promise<SyncStateSnapshot> {
   const shardFiles = await listShardFiles(shardsDir);
   const entries: Record<string, SyncStateEntry> = {};
+  const context = createShardLoadContext(scope);
 
   for (const relativePath of shardFiles) {
     const absolutePath = path.join(shardsDir, relativePath);
@@ -1083,7 +1187,9 @@ async function loadFromShards(shardsDir: string): Promise<SyncStateSnapshot> {
       continue;
     }
 
-    for (const [key, entry] of Object.entries(loadEntriesFromShard(shard, absolutePath))) {
+    for (const [key, entry] of Object.entries(
+      loadEntriesFromShard(shard, absolutePath, context),
+    )) {
       const existing = entries[key];
       if (existing === undefined) {
         entries[key] = entry;
@@ -1218,13 +1324,15 @@ export function createShardedJsonStateStore(
 
   return {
     [DURABLE_TRANSACTION_STATE_STORE]: durableTransaction,
-    async load() {
+    async load(scope) {
       const migrated = await migrateLegacyMonolithicState({ legacyPath, shardsDir });
       if (migrated !== null) {
-        return migrated;
+        // Migration is a one-time full rewrite, so it always materialises the
+        // whole corpus; narrow afterwards rather than complicate that path.
+        return projectSnapshotLocales(migrated, scope);
       }
 
-      return await loadFromShards(shardsDir);
+      return await loadFromShards(shardsDir, scope);
     },
     async save(state) {
       await writeShardFiles(shardsDir, state);

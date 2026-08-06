@@ -613,8 +613,15 @@ export async function runCli(
             ? { assumeStateLock: true }
             : {}),
         };
+        // Ask the store to materialise only the locales under check, then keep
+        // the projection: a store is free to ignore the scope and return a
+        // superset, and check must narrow regardless of which store is wired up.
         const stateSnapshot = projectStateLocales(
-          await config.state.load(),
+          await config.state.load(
+            checkOptions.locales === undefined
+              ? undefined
+              : { locales: checkOptions.locales }
+          ),
           checkOptions.locales
         );
         const checkConfig: AiTranslateConfig = {

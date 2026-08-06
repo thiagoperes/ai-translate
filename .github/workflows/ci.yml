@@ -60,6 +60,12 @@ jobs:
         run: pnpm -r --filter './packages/*' coverage
       - if: matrix.node-version == '22.23.1'
         run: pnpm -r --filter './packages/*' test:pack
+      # State-store efficiency is not observable from unit tests: string pooling
+      # and scoped loading return identical values whether or not they work, so
+      # only a measured baseline catches a silent regression.
+      - if: matrix.node-version == '22.23.1'
+        name: State Store Efficiency Regression Check
+        run: node --expose-gc ./bench/state.bench.mjs --scale 0.25 --baseline ./bench/baseline.json
 
   changeset:
     name: Release Notes Check

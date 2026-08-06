@@ -3613,7 +3613,10 @@ export async function validateCatalogs(
       : new Set(options.includePaths);
   const targetLocales = resolveTargetLocales(config, options);
   const catalogs = resolveCatalogs(config, options);
-  const state = await config.state.load();
+  // Validation only ever looks entries up by a locale in targetLocales, so the
+  // store never needs to materialise the rest of the corpus. This is read-only:
+  // the scoped snapshot must not reach save().
+  const state = await config.state.load({ locales: targetLocales });
   const issues: ValidationIssue[] = [];
   let legacyUnverifiedGeneratedEntries = 0;
   let sourceDocuments = 0;

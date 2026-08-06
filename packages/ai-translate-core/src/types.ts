@@ -455,8 +455,23 @@ export interface SyncStateSnapshot {
   version: number;
 }
 
+/**
+ * Narrows what a store must materialise. A store may ignore this and return a
+ * superset, so callers that depend on the narrowing must still filter the
+ * result; the scope is a memory optimisation, not an access control.
+ */
+export interface SyncStateLoadScope {
+  /** When set and non-empty, only entries for these locales need be returned. */
+  locales?: readonly string[];
+}
+
 export interface SyncStateStore {
-  load(): Promise<SyncStateSnapshot>;
+  /**
+   * A scoped snapshot is only safe to read. Passing one to {@link save} would
+   * delete every entry the scope excluded, so scoped loads must never feed a
+   * save.
+   */
+  load(scope?: SyncStateLoadScope): Promise<SyncStateSnapshot>;
   save(state: SyncStateSnapshot): Promise<void>;
   withLock<T>(operation: () => Promise<T>): Promise<T>;
 }
