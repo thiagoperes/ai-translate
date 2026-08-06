@@ -1,6 +1,6 @@
 {
   "name": "@ai-translate/next",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Auto-discovery for Next.js localization setups: detects next-intl and i18next projects, infers locales and message layout, and generates an ai-translate config.",
   "keywords": [
     "i18n",

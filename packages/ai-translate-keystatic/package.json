@@ -1,6 +1,6 @@
 {
   "name": "@ai-translate/keystatic",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Keystatic helpers for ai-translate: localized singleton paths and locale seed scaffolding.",
   "keywords": [
     "i18n",

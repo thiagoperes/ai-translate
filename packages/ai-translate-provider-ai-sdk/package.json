@@ -1,6 +1,6 @@
 {
   "name": "@ai-translate/provider-ai-sdk",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Run ai-translate against any AI SDK provider — OpenAI, Anthropic, Google, Bedrock, or a gateway — with one interchangeable translation and semantic-audit provider.",
   "keywords": [
     "i18n",
