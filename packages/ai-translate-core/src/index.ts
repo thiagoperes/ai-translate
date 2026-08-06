@@ -3,6 +3,8 @@ export * from "./acceptance";
 export * from "./audit";
 export * from "./candidate-cache";
 export * from "./constraints";
+export * from "./message-format";
+export * from "./plural";
 export * from "./policies";
 export * from "./reconcile";
 export * from "./segment-delta";

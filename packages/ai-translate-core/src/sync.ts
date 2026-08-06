@@ -3512,9 +3512,29 @@ function validationStructureSignatures(
   entries: ReadonlyMap<string, Entry>,
   excludedSourcePointers: ReadonlySet<string>
 ): string[] {
-  return [...entries.entries()]
-    .filter(([pointer]) => !excludedSourcePointers.has(pointer))
-    .map(([pointer, entry]) =>
+  const signatures: string[] = [];
+  const seenGroups = new Set<string>();
+
+  for (const [pointer, entry] of entries) {
+    if (excludedSourcePointers.has(pointer)) {
+      continue;
+    }
+
+    const structureGroup = entry.meta?.structureGroup;
+    if (typeof structureGroup === "string") {
+      // Members of a structure group are a set whose size is a property of the
+      // locale, not of the content: a plural family is two keys in English and
+      // four in Polish. Comparing them pointer by pointer would report every
+      // such family as a structural mismatch, so the whole family collapses to
+      // one signature and only its presence is compared.
+      if (!seenGroups.has(structureGroup)) {
+        seenGroups.add(structureGroup);
+        signatures.push(JSON.stringify(["group", structureGroup]));
+      }
+      continue;
+    }
+
+    signatures.push(
       JSON.stringify([
         pointer,
         entry.address.map((segment) =>
@@ -3528,8 +3548,10 @@ function validationStructureSignatures(
         entry.value === null ? "null" : typeof entry.value,
         entry.meta?.structureSignature ?? null,
       ])
-    )
-    .toSorted();
+    );
+  }
+
+  return signatures.toSorted();
 }
 
 function hasEquivalentValidationStructure(
@@ -4280,6 +4302,16 @@ export async function syncCatalogs(
       for (const locale of targetLocales) {
         const targetRef = catalog.createDocumentRef(sourceDocument.ref, locale);
         const existingDocument = await catalog.loadDocument(targetRef);
+        // Reconciliation and translation must see the same source, or a unit
+        // the catalog adds for this locale would be written without ever being
+        // translated.
+        const localizedSource =
+          catalog.localizeSourceDocument === undefined
+            ? sourceDocument
+            : await catalog.localizeSourceDocument({
+                locale,
+                source: sourceDocument,
+              });
         const targetDocument = await catalog.reconcileDocument({
           history: getStateHistory({
             catalogId: catalog.id,
@@ -4288,13 +4320,13 @@ export async function syncCatalogs(
             unitId: sourceDocument.ref.unitId,
           }),
           ref: targetRef,
-          source: sourceDocument,
+          source: localizedSource,
           target: existingDocument,
         });
         documentPlans.push({
           catalog,
           existingDocument,
-          sourceDocument,
+          sourceDocument: localizedSource,
           sourceIssues: sourceIssues.map(({ code, message, severity }) => ({
             code,
             message,

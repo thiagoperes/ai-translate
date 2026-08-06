@@ -2,8 +2,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 import { validateTranslationConstraints } from "./constraints";
 import { digestValue } from "./hash";
+import { resolveConfigMessageFormat } from "./message-format";
 import { normalizeTranslationContext } from "./policies";
-import { tokenizeText, validateTokenParity } from "./tokens";
+import { tokenizeText } from "./tokens";
 import { LEGACY_UNVERIFIED_GENERATION_REVISION } from "./types";
 import type {
   AiTranslateConfig,
@@ -250,7 +251,15 @@ function collectMarkdocStructureIssues(
 async function collectUncachedRawTranslationIssues(
   args: TranslationIssueCollectionArgs
 ): Promise<TranslationValidationIssue[]> {
-  const tokenIssues = validateTokenParity(args.sourceText, args.targetText);
+  const tokenIssues = resolveConfigMessageFormat(
+    args.config,
+    args.entry.messageFormatId
+  ).validateParity({
+    locale: args.locale,
+    sourceLocale: args.config.sourceLocale,
+    sourceText: args.sourceText,
+    targetText: args.targetText,
+  });
   const constraintIssues = validateTranslationConstraints({
     constraints: args.context?.constraints,
     targetText: args.targetText,

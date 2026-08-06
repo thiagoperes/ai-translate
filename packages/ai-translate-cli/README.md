@@ -54,6 +54,28 @@ This is how a provider API key normally reaches your config, for example `apiKey
 
 ## Commands
 
+### `init`
+
+Detects the project's Next.js localization setup and writes `ai-translate.config.ts` for it. This is the only command that runs without an existing config.
+
+```bash
+ai-translate init
+ai-translate init --preview
+ai-translate init --integration i18next
+```
+
+Recognises **next-intl** and **i18next** (including `react-i18next` and `next-i18next`), inferring the message layout, the locale list, and the source locale, then printing the evidence behind each conclusion.
+
+It writes exactly one file and nothing else. Installing packages, setting `OPENAI_API_KEY`, and reviewing the model choice are printed as next steps rather than done for you, so running it against an unfamiliar repository is safe.
+
+| Flag | Effect |
+| --- | --- |
+| `--preview` | Print the config that would be written and touch nothing. |
+| `--integration <id>` | Choose between setups when a project matches more than one. |
+| `--force` | Overwrite an existing `ai-translate.config.ts`. Refuses without it. |
+
+Exits non-zero when nothing is recognised, when a named integration was not detected, or when a config already exists and `--force` was not passed.
+
 ### `sync`
 
 Translates everything that needs it, validates each candidate, runs semantic audits if configured, and writes the results.

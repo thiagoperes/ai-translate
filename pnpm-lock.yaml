@@ -68,6 +68,9 @@ importers:
       '@ai-translate/fs-json':
         specifier: workspace:*
         version: link:../ai-translate-fs-json
+      '@ai-translate/next':
+        specifier: workspace:*
+        version: link:../ai-translate-next
       dotenv:
         specifier: 17.4.2
         version: 17.4.2
@@ -85,6 +88,10 @@ importers:
       globby:
         specifier: 16.2.2
         version: 16.2.2
+    devDependencies:
+      '@ai-translate/message-formats':
+        specifier: workspace:*
+        version: link:../ai-translate-message-formats
 
   packages/ai-translate-html:
     dependencies:
@@ -114,6 +121,17 @@ importers:
       gray-matter:
         specifier: 4.0.3
         version: 4.0.3
+
+  packages/ai-translate-message-formats:
+    dependencies:
+      '@ai-translate/core':
+        specifier: workspace:*
+        version: link:../ai-translate-core
+      '@formatjs/icu-messageformat-parser':
+        specifier: 3.5.16
+        version: 3.5.16
+
+  packages/ai-translate-next: {}
 
   packages/ai-translate-provider-openai:
     dependencies:
@@ -233,6 +251,12 @@ packages:
   '@colors/colors@1.5.0':
     resolution: {integrity: sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ==}
     engines: {node: '>=0.1.90'}
+
+  '@formatjs/icu-messageformat-parser@3.5.16':
+    resolution: {integrity: sha512-kl6b/4D56gjGZi4ZewSmvXbalHwjOUI5ogEHPZqw42goeXTTrL7/yuPzvdrvr0QigDtvaOeb+UeMf62jks43Yg==}
+
+  '@formatjs/icu-skeleton-parser@2.1.11':
+    resolution: {integrity: sha512-j8cUmOJzVgkHuS0QiQ6ga76UIoLOFSAMWhs7aZJztH3aAdCOAE6vpC8KVvFB4cU10ON0y2/5oOVmPJ43s2lTwA==}
 
   '@inquirer/external-editor@1.0.3':
     resolution: {integrity: sha512-RWbSrDiYmO4LbejWY7ttpxczuwQyZLBUyygsA9Nsv95hpzUWwnNTVQmAq3xuh7vNwCp07UTmE5i11XAEExx4RA==}
@@ -2141,6 +2165,12 @@ snapshots:
 
   '@colors/colors@1.5.0':
     optional: true
+
+  '@formatjs/icu-messageformat-parser@3.5.16':
+    dependencies:
+      '@formatjs/icu-skeleton-parser': 2.1.11
+
+  '@formatjs/icu-skeleton-parser@2.1.11': {}
 
   '@inquirer/external-editor@1.0.3(@types/node@26.1.2)':
     dependencies:

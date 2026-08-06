@@ -18,6 +18,7 @@ import type {
 import { importStartupV1State } from "@ai-translate/fs-json";
 
 import { loadConfig, loadEnvFiles } from "./config";
+import { runInit } from "./init";
 import { runStagedCatalogTransaction } from "./transaction";
 
 export { defineConfig } from "@ai-translate/core";
@@ -28,13 +29,16 @@ interface CommandOptions {
   catalogIds?: string[];
   config?: string;
   dryRun?: boolean;
+  force?: boolean;
   forceRetranslate?: boolean;
   forceRetranslatePaths?: string[];
   includePaths?: string[];
   from?: string;
   legacyFile?: string;
   locales?: string[];
+  integration?: string;
   maxPendingTranslations?: number;
+  preview?: boolean;
   refresh?: boolean;
   strategy?: CatalogScaffoldStrategy;
   unitIds?: string[];
@@ -411,6 +415,7 @@ function printHelp(): void {
   console.log(`ai-translate
 
 Usage:
+  ai-translate init [--integration <next-intl|i18next>] [--preview] [--force]
   ai-translate validate [--config <path>]
   ai-translate check [--config <path>] [--locale <locale>] [--catalog <id>] [--unit <id>] [--include-path <json-pointer>] [--max-pending-translations <count>]
   ai-translate audit [--check] [--refresh] [--config <path>] [--locale <locale>] [--catalog <id>] [--unit <id>] [--include-path <json-pointer>]
@@ -475,6 +480,9 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
         case "dry-run":
           options.dryRun = true;
           break;
+        case "force":
+          options.force = true;
+          break;
         case "force-retranslate":
           options.forceRetranslate = true;
           break;
@@ -500,11 +508,20 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
             index += 1;
           }
           break;
+        case "integration":
+          options.integration = requireOptionValue(flag, nextValue);
+          if (inlineValue === undefined) {
+            index += 1;
+          }
+          break;
         case "locale":
           (options.locales ??= []).push(requireOptionValue(flag, nextValue));
           if (inlineValue === undefined) {
             index += 1;
           }
+          break;
+        case "preview":
+          options.preview = true;
           break;
         case "max-pending-translations":
           options.maxPendingTranslations = requireNonNegativeIntegerOption(
@@ -584,6 +601,18 @@ export async function runCli(
     }
 
     switch (parsed.command) {
+      case "init": {
+        // No loadConfig and no loadEnvFiles: init runs before either exists.
+        const result = await runInit(cwd, {
+          force: parsed.options.force === true,
+          ...(parsed.options.integration === undefined
+            ? {}
+            : { integration: parsed.options.integration }),
+          preview: parsed.options.preview === true || parsed.options.dryRun === true,
+        });
+        console.log(result.lines.join("\n"));
+        return 0;
+      }
       case "validate": {
         await loadEnvFiles(cwd);
         const { config, configPath } = await loadConfig(

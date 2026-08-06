@@ -13,7 +13,7 @@
   ],
   "license": "MIT",
   "author": "Thiago Peres",
-  "homepage": "https://github.com/thiagoperes/ai-translate/tree/main/packages/ai-translate-core#readme",
+  "homepage": "https://github.com/thiagoperes/ai-translate#packages",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/thiagoperes/ai-translate.git",
@@ -64,6 +64,16 @@
       "types": "./dist/json.d.mts",
       "import": "./dist/json.mjs",
       "default": "./dist/json.mjs"
+    },
+    "./message-format": {
+      "types": "./dist/message-format.d.mts",
+      "import": "./dist/message-format.mjs",
+      "default": "./dist/message-format.mjs"
+    },
+    "./plural": {
+      "types": "./dist/plural.d.mts",
+      "import": "./dist/plural.mjs",
+      "default": "./dist/plural.mjs"
     },
     "./policies": {
       "types": "./dist/policies.d.mts",

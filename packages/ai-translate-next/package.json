@@ -1,23 +1,26 @@
 {
-  "name": "@ai-translate/fs-json",
+  "name": "@ai-translate/next",
   "version": "0.0.0",
-  "description": "Filesystem JSON catalog adapters, translation state stores, and candidate caches for ai-translate.",
+  "description": "Auto-discovery for Next.js localization setups: detects next-intl and i18next projects, infers locales and message layout, and generates an ai-translate config.",
   "keywords": [
     "i18n",
     "l10n",
     "internationalization",
     "localization",
     "translation",
-    "json",
-    "ai"
+    "nextjs",
+    "next-intl",
+    "i18next",
+    "app-router",
+    "codegen"
   ],
   "license": "MIT",
   "author": "Thiago Peres",
-  "homepage": "https://github.com/thiagoperes/ai-translate#packages",
+  "homepage": "https://github.com/thiagoperes/ai-translate/tree/main/packages/ai-translate-next#readme",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/thiagoperes/ai-translate.git",
-    "directory": "packages/ai-translate-fs-json"
+    "directory": "packages/ai-translate-next"
   },
   "bugs": {
     "url": "https://github.com/thiagoperes/ai-translate/issues"
@@ -35,26 +38,6 @@
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
-    "./bundle-json": {
-      "types": "./dist/bundle-json.d.mts",
-      "import": "./dist/bundle-json.mjs",
-      "default": "./dist/bundle-json.mjs"
-    },
-    "./document-json": {
-      "types": "./dist/document-json.d.mts",
-      "import": "./dist/document-json.mjs",
-      "default": "./dist/document-json.mjs"
-    },
-    "./namespace-json": {
-      "types": "./dist/namespace-json.d.mts",
-      "import": "./dist/namespace-json.mjs",
-      "default": "./dist/namespace-json.mjs"
-    },
-    "./state": {
-      "types": "./dist/state.d.mts",
-      "import": "./dist/state.mjs",
-      "default": "./dist/state.mjs"
-    },
     "./package.json": "./package.json"
   },
   "publishConfig": {
@@ -68,14 +51,7 @@
     "coverage": "vitest run --config vitest.config.ts --coverage",
     "test:pack": "publint . && attw --pack . --profile esm-only"
   },
-  "dependencies": {
-    "@ai-translate/core": "workspace:*",
-    "globby": "16.2.2"
-  },
   "engines": {
     "node": ">=20.19.0"
-  },
-  "devDependencies": {
-    "@ai-translate/message-formats": "workspace:*"
   }
 }

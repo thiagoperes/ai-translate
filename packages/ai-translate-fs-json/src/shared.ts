@@ -9,6 +9,8 @@ import {
   setJsonValueAtAddress,
   visitJsonLeaves,
 } from "@ai-translate/core/json";
+import type { MessageFormat } from "@ai-translate/core/message-format";
+import type { PluralKeyStrategy } from "@ai-translate/core/plural";
 import { rebaseIndexedEntries } from "@ai-translate/core/reconcile";
 import { tokenizeText } from "@ai-translate/core/tokens";
 import type {
@@ -17,9 +19,13 @@ import type {
   DocumentRef,
   Entry,
   JsonValue,
+  LoadedDocument,
+  LocalizeSourceDocumentArgs,
   Policy,
   ReconcileHistoryEntry,
 } from "@ai-translate/core/types";
+
+import { collapsePluralFamilies, expandPluralKeys, pluralStructureGroups } from "./plurals";
 
 export interface JsonRootState {
   root: JsonValue;
@@ -84,11 +90,33 @@ function inferStorage(value: boolean | number | string | null): Entry["storage"]
   return typeof value === "string" ? "string" : "scalar";
 }
 
-export function buildEntriesFromJson(root: JsonValue): Entry[] {
+export interface JsonEntryOptions {
+  /** Interprets each string leaf. Defaults to the plain format, which keeps
+   * output identical to callers that predate message formats. */
+  messageFormat?: MessageFormat;
+  /** When set, sibling plural keys are marked as one structure group so
+   * locales with more plural forms than the source still validate. */
+  plurals?: PluralKeyStrategy;
+}
+
+export function buildEntriesFromJson(
+  root: JsonValue,
+  options: JsonEntryOptions = {},
+): Entry[] {
+  const tokenize = options.messageFormat?.tokenize ?? tokenizeText;
+  const messageFormatId = options.messageFormat?.id;
+  const structureGroups =
+    options.plurals === undefined
+      ? undefined
+      : pluralStructureGroups(root, options.plurals);
+
   const entries: Entry[] = [];
   visitJsonLeaves(root, ({ address, value }) => {
+    const structureGroup = structureGroups?.get(addressToJsonPointer(address));
     const baseEntry = {
       address: [...address],
+      ...(messageFormatId === undefined ? {} : { messageFormatId }),
+      ...(structureGroup === undefined ? {} : { meta: { structureGroup } }),
       policy: inferPolicy(value),
       storage: inferStorage(value),
       value,
@@ -98,7 +126,7 @@ export function buildEntriesFromJson(root: JsonValue): Entry[] {
       typeof value === "string"
         ? {
             ...baseEntry,
-            tokens: tokenizeText(value),
+            tokens: [...tokenize(value)],
           }
         : baseEntry,
     );
@@ -175,8 +203,35 @@ function jsonStructure(value: JsonValue): unknown {
   return typeof value;
 }
 
-export function jsonStructureDigest(root: JsonValue): string {
-  return digestValue(JSON.stringify(jsonStructure(root)));
+/**
+ * Builds the `localizeSourceDocument` hook for a JSON catalog, or nothing when
+ * the catalog has no plural strategy and the source is already locale-neutral.
+ */
+export function createJsonSourceLocalizer(
+  plurals: PluralKeyStrategy | undefined,
+  entryOptions: JsonEntryOptions,
+): ((args: LocalizeSourceDocumentArgs) => Promise<LoadedDocument>) | undefined {
+  if (plurals === undefined) {
+    return undefined;
+  }
+
+  return ({ locale, source }) => {
+    const root = expandPluralKeys((source.state as JsonRootState).root, locale, plurals);
+    return Promise.resolve({
+      entries: buildEntriesFromJson(root, entryOptions),
+      ref: source.ref,
+      state: { root } satisfies JsonRootState,
+      structureDigest: jsonStructureDigest(root, plurals),
+    });
+  };
+}
+
+export function jsonStructureDigest(
+  root: JsonValue,
+  plurals?: PluralKeyStrategy,
+): string {
+  const normalized = plurals === undefined ? root : collapsePluralFamilies(root, plurals);
+  return digestValue(JSON.stringify(jsonStructure(normalized)));
 }
 
 export function updateJsonRootFromEntries(

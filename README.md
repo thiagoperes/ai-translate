@@ -21,6 +21,7 @@ npx ai-translate check            # CI gate: fails if a locale is behind
 - **Semantic audits.** An optional second model pass, forward and adversarial, catches meaning that was narrowed, broadened, omitted, or contradicted.
 - **A CI gate that costs nothing.** `ai-translate check` runs validation, a dry-run sync, and a provenance check without calling the model or writing a byte, then exits non-zero if a locale is stale.
 - **JSON, Markdoc, and HTML out of the box.** Nested namespace files, frontmatter, inline tokens and tag attributes, text nodes and translatable attributes.
+- **Drop-in for Next.js.** `ai-translate init` detects next-intl or i18next, infers locales and message layout, and writes the config. ICU and i18next messages are validated as structures, and locale-specific plural forms are generated and translated.
 - **Your manual edits survive.** A hand-corrected translation is recorded as `manual` and honoured on later runs instead of being silently overwritten.
 - **Atomic runs.** Content files and translation state are committed in one transaction, so an interrupted or failing sync leaves the working tree untouched.
 - **Work on a slice.** `--locale`, `--catalog`, `--unit`, and `--include-path` scope a run to exactly what you are changing.
@@ -64,6 +65,28 @@ npm install --save-dev @ai-translate/cli @ai-translate/core @ai-translate/fs-jso
 Requires Node 20.19 or newer (Node 22+ for `@ai-translate/provider-openai`).
 
 ## Quickstart
+
+### Already using Next.js?
+
+```bash
+npx ai-translate init
+```
+
+`init` inspects the project, works out whether it uses **next-intl** or **i18next**, finds the message files, reads the locale list and the default locale, and writes an `ai-translate.config.ts` wired to what it found. It prints the evidence for every conclusion, and writes nothing else — installing packages and setting `OPENAI_API_KEY` stay in your hands.
+
+```text
+Detected i18next:
+  - i18next, react-i18next declared as dependencies (package.json)
+  - i18next settings module (lib/i18n/i18n.settings.ts)
+  - 28 namespace file(s) across 16 locales (public/locales/en)
+  - Source locale en, 15 target locale(s): de, el, es, et, fi, fr, ga, hr, it, lt, lv, nl, pt, sk, sl
+```
+
+Use `--preview` to see the config without writing it, and `--integration <id>` if the project runs more than one library. Detection is read-only and never imports project code; see [`@ai-translate/next`](packages/ai-translate-next) to add your own integration.
+
+Suffix-keyed plurals are handled for you. English declares `items_one` and `items_other`; Polish files get `one`, `few`, `many`, and `other`, Japanese keeps just what it needs, and each added form is translated rather than left seeded in English.
+
+### Starting from scratch
 
 Create `ai-translate.config.ts` in your project root:
 
@@ -115,6 +138,7 @@ Then wire the gate into CI:
 
 | Command | What it does |
 | --- | --- |
+| `init` | Detect a Next.js localization setup and write `ai-translate.config.ts` for it. |
 | `sync` | Translate everything that needs it, validate, audit, and write. |
 | `check` | Read-only CI gate. Fails if validation, a dry-run sync, or audit provenance would produce work. |
 | `validate` | Structural and source-level validation only, no provider calls. |
@@ -135,9 +159,11 @@ Every command accepts `--config` plus the scoping flags above. See the [CLI READ
 | [`@ai-translate/markdoc`](packages/ai-translate-markdoc) | Markdoc catalog adapter, including frontmatter and tag attributes. |
 | [`@ai-translate/html`](packages/ai-translate-html) | HTML catalog adapter for text nodes and translatable attributes. |
 | [`@ai-translate/keystatic`](packages/ai-translate-keystatic) | Localized singleton paths and locale seeds for Keystatic. |
+| [`@ai-translate/message-formats`](packages/ai-translate-message-formats) | ICU and i18next message formats, plus CLDR plural key strategies. |
+| [`@ai-translate/next`](packages/ai-translate-next) | Next.js auto-discovery for next-intl and i18next, and config generation. |
 | [`@ai-translate/provider-openai`](packages/ai-translate-provider-openai) | OpenAI translation and semantic-audit providers. |
 
-Need a different format or a different model? `CatalogAdapter`, `TranslationProvider`, `SemanticAuditProvider`, and `SyncStateStore` are plain interfaces, and everything shipped here is written against them.
+Need a different format, a different model, or a different i18n library? `CatalogAdapter`, `TranslationProvider`, `SemanticAuditProvider`, `SyncStateStore`, `MessageFormat`, and `Integration` are plain interfaces, and everything shipped here is written against them.
 
 ## How a sync decides what to translate
 
@@ -167,7 +193,9 @@ pnpm test
 pnpm lint
 ```
 
-Releases use [changesets](https://github.com/changesets/changesets): add one with `pnpm exec changeset`, and publishing happens from CI on merge to `main`.
+The workspace development toolchain uses Node 24.15.0 (see [`.node-version`](.node-version)); published packages declare their own runtime requirements.
+
+Releases use [changesets](https://github.com/changesets/changesets): add one with `pnpm exec changeset`, run `pnpm release:version` on the reviewed release branch, and publishing happens from CI after the versioned changes reach `main`.
 
 ## License
 

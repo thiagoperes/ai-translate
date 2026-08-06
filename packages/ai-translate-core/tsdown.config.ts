@@ -11,6 +11,8 @@ export default defineConfig({
     "src/constraints.ts",
     "src/hash.ts",
     "src/json.ts",
+    "src/message-format.ts",
+    "src/plural.ts",
     "src/policies.ts",
     "src/reconcile.ts",
     "src/sync.ts",

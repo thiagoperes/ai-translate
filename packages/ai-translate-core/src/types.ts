@@ -1,3 +1,5 @@
+import type { MessageFormat } from "./message-format";
+
 export type Policy = "translate" | "copy" | "exclude";
 
 export type EntryStorage = "string" | "scalar" | "html" | "markdoc";
@@ -91,6 +93,21 @@ export type Token =
 
 export interface Entry {
   address: readonly AddressSegment[];
+  /** Names the {@link MessageFormat} that interprets `value`. Omitting it means
+   * the plain format, so entries written before formats existed keep validating
+   * exactly as before. An id rather than the object itself, because entries are
+   * serialised into the validation cache key. */
+  messageFormatId?: string;
+  /**
+   * Adapter-defined metadata. Two keys are reserved by the engine:
+   *
+   * - `structureSignature` distinguishes entries that share a pointer shape but
+   *   differ structurally, such as Markdoc block kinds.
+   * - `structureGroup` marks entries whose *count* is a property of the locale
+   *   rather than of the content. Members of one group compare as a single
+   *   unit during structural validation, which is what lets a plural family be
+   *   two keys in English and four in Polish without reporting a mismatch.
+   */
   meta?: Readonly<Record<string, JsonPrimitive>>;
   policy: Policy;
   storage: EntryStorage;
@@ -149,9 +166,25 @@ export interface ScaffoldLocaleResult {
 
 export interface CatalogAdapter {
   readonly id: string;
+  /** Every format this catalog stamps onto its entries. Core builds the
+   * validation registry from these, so a catalog constructed with a format is
+   * self-registering and the user never lists it twice. */
+  readonly messageFormats?: readonly MessageFormat[];
   createDocumentRef(sourceRef: DocumentRef, locale: string): DocumentRef;
   listDocumentRefs(sourceLocale: string): Promise<readonly DocumentRef[]>;
   loadDocument(ref: DocumentRef): Promise<LoadedDocument | null>;
+  /**
+   * Reshapes the source document for one target locale before it drives a
+   * sync.
+   *
+   * A source document is loaded once and reused for every locale, which is
+   * correct only while the set of translatable units is locale-independent.
+   * Suffix-keyed plurals break that: English states two forms and Polish needs
+   * four, and the two extra units have to exist on the source side or they
+   * will never be translated. Implementations must be pure and must keep every
+   * pointer the authored source already had.
+   */
+  localizeSourceDocument?(args: LocalizeSourceDocumentArgs): Promise<LoadedDocument>;
   /** Combine a reconciled document with the partially written state of a
    * staged file. Only formats that pack several logical documents into one
    * file need this: without it a write would either drop sibling documents
@@ -163,6 +196,11 @@ export interface CatalogAdapter {
     options: ScaffoldLocaleOptions
   ): Promise<ScaffoldLocaleResult>;
   writeDocument(document: LoadedDocument): Promise<void>;
+}
+
+export interface LocalizeSourceDocumentArgs {
+  locale: string;
+  source: LoadedDocument;
 }
 
 export interface GlossaryTerm {
@@ -733,6 +771,10 @@ export interface AiTranslateConfig {
   generationRevision?: string;
   legacyOriginPolicy?: "preserve" | "retranslate" | "validate-existing";
   manualOriginPolicy?: "preserve" | "retranslate" | "validate-existing";
+  /** Message formats that no catalog advertises. Formats reachable through
+   * {@link CatalogAdapter.messageFormats} are registered automatically; this is
+   * only for entries stamped by something other than a catalog. */
+  messageFormats?: readonly MessageFormat[];
   /** Declarative generation/selection contracts keyed by semantic content role. */
   outputContracts?: Partial<
     Record<TranslationContentRole, TranslationOutputContract>

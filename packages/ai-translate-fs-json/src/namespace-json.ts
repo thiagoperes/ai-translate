@@ -1,6 +1,8 @@
 import { globby } from "globby";
 import { promises as fs } from "node:fs";
 
+import type { MessageFormat } from "@ai-translate/core/message-format";
+import type { PluralKeyStrategy } from "@ai-translate/core/plural";
 import type {
   CatalogAdapter,
   ScaffoldLocaleOptions,
@@ -9,6 +11,7 @@ import type {
 
 import {
   buildEntriesFromJson,
+  createJsonSourceLocalizer,
   createDocumentRef,
   readJsonFile,
   jsonStructureDigest,
@@ -16,16 +19,27 @@ import {
   updateJsonRootFromEntries,
   writeJsonFileAtomic,
 } from "./shared";
-import type { JsonRootState } from "./shared";
+import type { JsonEntryOptions, JsonRootState } from "./shared";
 
 interface NamespaceJsonCatalogOptions {
   id?: string;
+  /** Interprets each string leaf; also registered with the engine so
+   * validation resolves it without the user listing it separately. */
+  messageFormat?: MessageFormat;
+  /** Enables suffix-key plural handling, as used by i18next. Target files gain
+   * the forms their locale requires; ICU-style formats need nothing here. */
+  plurals?: PluralKeyStrategy;
   rootDir: string;
   sourceLocale: string;
 }
 
 export function createNamespaceJsonCatalog(options: NamespaceJsonCatalogOptions): CatalogAdapter {
   const catalogId = options.id ?? "namespace-json";
+  const entryOptions: JsonEntryOptions = {
+    ...(options.messageFormat === undefined ? {} : { messageFormat: options.messageFormat }),
+    ...(options.plurals === undefined ? {} : { plurals: options.plurals }),
+  };
+  const localizeSourceDocument = createJsonSourceLocalizer(options.plurals, entryOptions);
 
   const toFilePath = (locale: string, unitId: string): string =>
     `${options.rootDir}/${locale}/${unitId}.json`;
@@ -89,6 +103,10 @@ export function createNamespaceJsonCatalog(options: NamespaceJsonCatalogOptions)
       });
     },
     id: catalogId,
+    ...(options.messageFormat === undefined
+      ? {}
+      : { messageFormats: [options.messageFormat] }),
+    ...(localizeSourceDocument === undefined ? {} : { localizeSourceDocument }),
     async listDocumentRefs(sourceLocale) {
       const files = await globby("*.json", {
         absolute: true,
@@ -113,15 +131,16 @@ export function createNamespaceJsonCatalog(options: NamespaceJsonCatalogOptions)
       }
 
       return {
-        entries: buildEntriesFromJson(root),
+        entries: buildEntriesFromJson(root, entryOptions),
         ref,
         state: {
           root,
         } satisfies JsonRootState,
-        structureDigest: jsonStructureDigest(root),
+        structureDigest: jsonStructureDigest(root, options.plurals),
       };
     },
     reconcileDocument({ history = [], ref, source, target }) {
+      // Already reshaped for this locale by localizeSourceDocument.
       const sourceRoot = (source.state as JsonRootState).root;
       const targetRoot = target ? (target.state as JsonRootState).root : undefined;
       const { reconciliation, root: nextRoot } = reconcileJsonRootWithHistory(
@@ -131,13 +150,13 @@ export function createNamespaceJsonCatalog(options: NamespaceJsonCatalogOptions)
       );
 
       return Promise.resolve({
-        entries: buildEntriesFromJson(nextRoot),
+        entries: buildEntriesFromJson(nextRoot, entryOptions),
         ...(reconciliation === undefined ? {} : { reconciliation }),
         ref,
         state: {
           root: nextRoot,
         } satisfies JsonRootState,
-        structureDigest: jsonStructureDigest(nextRoot),
+        structureDigest: jsonStructureDigest(nextRoot, options.plurals),
       });
     },
     async scaffoldLocale(scaffoldOptions: ScaffoldLocaleOptions): Promise<ScaffoldLocaleResult> {
