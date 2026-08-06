@@ -1,18 +1,31 @@
 # ai-translate
 
-**Keep a multi-locale site or app in sync from a single source language — without retranslating what has not changed.**
+**AI translation and localization for JSON, Markdoc, and HTML content — incremental, validated, and safe to run in CI.**
 
 [![CI](https://github.com/thiagoperes/ai-translate/actions/workflows/ci.yml/badge.svg)](https://github.com/thiagoperes/ai-translate/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520.19-brightgreen.svg)](#install)
 
-You author content in one language. `ai-translate` walks your catalogs, works out which strings are new, changed, or no longer valid under the current contract, sends only those to a translation provider, validates every candidate before it is written to disk, and records provenance so the next run can prove what is still current.
+`ai-translate` is a TypeScript toolkit and CLI that keeps a multi-language website or app translated from a single source locale. You write content in one language; it works out which strings are new, changed, or no longer valid under the current translation contract, sends only those to an LLM, checks every candidate before it reaches disk, and records enough provenance that the next run can prove what is still current.
 
 ```bash
 npx ai-translate sync --dry-run   # what would be translated, and why
 npx ai-translate sync             # translate, validate, write
-npx ai-translate check            # CI gate: fails if anything is out of sync
+npx ai-translate check            # CI gate: fails if a locale is behind
 ```
+
+## Features
+
+- **Incremental by design.** Every entry stores a digest of its source text, its resolved context, and the contract that generated it. Change one heading and one heading is sent — not the file, not the locale.
+- **Validated before anything is written.** Placeholder and tag parity, glossary and forbidden terms, preserved numbers, currencies, dates, and links, plus any validator you add.
+- **Semantic audits.** An optional second model pass, forward and adversarial, catches meaning that was narrowed, broadened, omitted, or contradicted.
+- **A CI gate that costs nothing.** `ai-translate check` runs validation, a dry-run sync, and a provenance check without calling the model or writing a byte, then exits non-zero if a locale is stale.
+- **JSON, Markdoc, and HTML out of the box.** Nested namespace files, frontmatter, inline tokens and tag attributes, text nodes and translatable attributes.
+- **Your manual edits survive.** A hand-corrected translation is recorded as `manual` and honoured on later runs instead of being silently overwritten.
+- **Atomic runs.** Content files and translation state are committed in one transaction, so an interrupted or failing sync leaves the working tree untouched.
+- **Work on a slice.** `--locale`, `--catalog`, `--unit`, and `--include-path` scope a run to exactly what you are changing.
+- **Built for large catalogs.** Sharded state and locale-scoped loads hold a single-locale check to 7.9 MB of heap on a 246,000-entry corpus.
+- **Pluggable end to end.** Catalog adapters, translation providers, audit providers, and state stores are plain TypeScript interfaces.
 
 ## Why this exists
 
@@ -20,14 +33,14 @@ Most "translate my JSON with an LLM" tools re-send everything on every run and t
 
 ### Nothing is translated twice without a reason
 
-Every translated entry stores a digest of its source text, its resolved context, and the generation contract that produced it. A run only touches entries whose inputs changed — and `--dry-run` tells you exactly what would be sent and why:
+Because every entry carries the digests that produced it, a run can prove what is still current — and `--dry-run` shows you the decision before you pay for it:
 
 ```jsonc
 {
   "dryRun": true,
   "metrics": {
     "scannedDocuments": 412,
-    "translatedEntries": 37,      // would be sent to the provider
+    "translatedEntries": 37,      // would be sent to the model
     "copiedEntries": 5891,        // already current, untouched
     "invalidationReasons": {
       "source-changed": 31,
@@ -40,9 +53,7 @@ Every translated entry stores a digest of its source text, its resolved context,
 
 ### Nothing is written without being checked
 
-Candidates pass deterministic validation first: placeholder and tag parity, glossary and forbidden terms, preserved numbers, currencies, dates and links, plus any validator you supply. Optional semantic audits then use a second model pass — forward and adversarial — to catch meaning that was narrowed, broadened, omitted, or contradicted. A candidate that fails is retried or quarantined, never silently shipped.
-
-Writes go through a staged transaction, so content files and state are committed together or not at all.
+Deterministic validation runs first, then optional semantic audits. A candidate that fails is retried or quarantined, never silently shipped — so a bad generation costs you a retry, not a production string in a language you cannot read.
 
 ## Install
 
@@ -112,7 +123,7 @@ Then wire the gate into CI:
 | `scaffold-locale <locale> --from <locale>` | Create the files for a locale without translating. |
 | `migrate-state --from startup-v1` | Import a legacy lock file into translation state. |
 
-Every command accepts `--config` plus the scoping flags `--locale`, `--catalog`, `--unit`, and `--include-path`, so you can work on one slice at a time. See the [CLI README](packages/ai-translate-cli/README.md) for the full flag reference.
+Every command accepts `--config` plus the scoping flags above. See the [CLI README](packages/ai-translate-cli/README.md) for the full flag reference.
 
 ## Packages
 
@@ -126,6 +137,8 @@ Every command accepts `--config` plus the scoping flags `--locale`, `--catalog`,
 | [`@ai-translate/keystatic`](packages/ai-translate-keystatic) | Localized singleton paths and locale seeds for Keystatic. |
 | [`@ai-translate/provider-openai`](packages/ai-translate-provider-openai) | OpenAI translation and semantic-audit providers. |
 
+Need a different format or a different model? `CatalogAdapter`, `TranslationProvider`, `SemanticAuditProvider`, and `SyncStateStore` are plain interfaces, and everything shipped here is written against them.
+
 ## How a sync decides what to translate
 
 1. Each catalog lists its source documents and loads them into addressable entries.
@@ -135,23 +148,15 @@ Every command accepts `--config` plus the scoping flags `--locale`, `--catalog`,
 5. Queued entries are batched per locale and sent to the provider, with any glossary terms and context rules that apply.
 6. Candidates are validated, optionally audited, and written atomically. State is updated in the same transaction.
 
-Manual edits are respected: entries recorded with a `manual` origin follow `manualOriginPolicy`, so a hand-corrected translation is preserved rather than overwritten on the next run.
+## Benchmarks
 
-## Built for large catalogs
-
-State is sharded on disk rather than kept in one growing file, and read-only commands ask the store for just the locales they need. On a 246,000-entry corpus that keeps a single-locale `check` at 7.9 MB of retained heap instead of the 88.8 MB a full load costs.
-
-Space, memory, and token benchmarks live in [`bench/`](bench) and run against both synthetic and real corpora:
+Space, memory, and token cost are measured against both synthetic and real corpora, with a baseline guard in CI so a regression fails the build:
 
 ```bash
 pnpm bench           # measure
 pnpm bench:baseline  # record a baseline
-pnpm bench:check     # fail on regression (also runs in CI)
+pnpm bench:check     # fail on regression
 ```
-
-## Extending it
-
-Catalog adapters, providers, and state stores are plain interfaces — `CatalogAdapter`, `TranslationProvider`, `SemanticAuditProvider`, and `SyncStateStore` — so you can supply your own for a format or model that is not covered here. Everything shipped in this repo is written against the same interfaces.
 
 ## Development
 
