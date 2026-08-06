@@ -85,7 +85,7 @@ ${catalogOptions.map((option) => `      ${option}`).join("\n")}
   ],
   provider: createOpenAiTranslationProvider({
     apiKey: process.env.OPENAI_API_KEY,
-    model: "gpt-4.1-mini",
+    model: "gpt-5.6-luna",
   }),
   sourceLocale,
   state: createShardedJsonStateStore({ rootDir: process.cwd() }),

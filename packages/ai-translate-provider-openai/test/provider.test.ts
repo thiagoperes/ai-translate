@@ -448,7 +448,7 @@ describe("OpenAiTranslationProvider", () => {
     const provider = new OpenAiTranslationProvider({
       client,
       maxRetries: 1,
-      systemPrompt: "Use Acme's house style.",
+      systemPrompt: "Use Rally's house style.",
     }) as unknown as ExposedProvider;
 
     await provider.translateBatch({
@@ -712,7 +712,7 @@ describe("OpenAiTranslationProvider", () => {
 
     const result = await provider.translate({
       glossary: [
-        { note: "Do not translate the brand name.", source: "Acme", target: "Acme" },
+        { note: "Do not translate the brand name.", source: "Rally", target: "Rally" },
         { source: "driver", target: "pilote" },
       ],
       locale: "fr-FR",
@@ -721,7 +721,7 @@ describe("OpenAiTranslationProvider", () => {
           catalogId: "marketing",
           context: {
             notes: "Keep the brand slogan in English.",
-            product: "Acme",
+            product: "Rally",
           },
           path: "/memory/en/marketing/common.json",
           provenance: {
@@ -747,22 +747,24 @@ describe("OpenAiTranslationProvider", () => {
       messages: { content: string; role: string }[];
       max_completion_tokens: number;
       model: string;
-      temperature: number;
+      temperature: number | undefined;
     };
 
-    expect(request.model).toBe("gpt-5.4");
-    expect(request.temperature).toBe(0.1);
+    expect(request.model).toBe("gpt-5.6-luna");
+    // The default model is a reasoning model, which rejects any temperature
+    // but its own default, so none is sent unless a caller configures one.
+    expect(request).not.toHaveProperty("temperature");
     expect(request.messages[0]).toMatchObject({ role: "system" });
     expect(request.messages[0]?.content).toContain(
       "Translate the provided English strings into locale fr-FR.",
     );
     expect(request.messages[0]?.content).toContain("inclusive (at least N)");
     expect(request.messages[0]?.content).toContain("Project translation context:");
-    expect(request.messages[0]?.content).toContain("Product: Acme");
+    expect(request.messages[0]?.content).toContain("Product: Rally");
     expect(request.messages[0]?.content).toContain("Keep the brand slogan in English.");
     expect(request.messages[0]?.content).toContain("Do not omit, merge, or deduplicate entries.");
     expect(request.messages[0]?.content).toContain(
-      'Glossary terms that must be respected:\n- "Acme" => "Acme" (Do not translate the brand name.)\n- "driver" => "pilote"',
+      'Glossary terms that must be respected:\n- "Rally" => "Rally" (Do not translate the brand name.)\n- "driver" => "pilote"',
     );
 
     const payload: unknown = JSON.parse(request.messages[1]?.content ?? "{}");
@@ -1007,7 +1009,7 @@ describe("OpenAiTranslationProvider", () => {
         alternatives: ["Top-Flottenkarten für Unternehmen", "Beste Firmen-Flottenkarten"],
         key: "serp-title",
         selfCheck: {
-          modelId: "gpt-5.4",
+          modelId: "gpt-5.6-luna",
           planDigests: ["seo-plan-digest"],
           verified: true,
         },
@@ -1049,7 +1051,7 @@ describe("OpenAiTranslationProvider", () => {
               translations: {
                 protected: {
                   localizedNumbers: { number_0: "99%" },
-                  translationParts: { part_0: "Spare", part_1: " mit Acme" },
+                  translationParts: { part_0: "Spare", part_1: " mit Rally" },
                 },
               },
             },
@@ -1062,14 +1064,14 @@ describe("OpenAiTranslationProvider", () => {
     await expect(
       provider.translateBatch({
         batch: [
-          createRequest("protected", "Save 99% with Acme", {
+          createRequest("protected", "Save 99% with Rally", {
             contentRole: "metadata-description",
             outputContract: { hardMaximumVisibleCharacters: 20 },
           }),
         ],
         locale: "de",
       }),
-    ).resolves.toEqual([{ key: "protected", translation: "Spare 99% mit Acme" }]);
+    ).resolves.toEqual([{ key: "protected", translation: "Spare 99% mit Rally" }]);
 
     const request = parse.mock.calls[0]?.[0] as {
       messages: { content: string; role: string }[];
@@ -1335,10 +1337,10 @@ describe("OpenAiTranslationProvider", () => {
     await expect(
       provider.translateBatch({
         batch: [
-          createRequest("action", "You can apply for a Acme card.", {
+          createRequest("action", "You can apply for a Rally card.", {
             context: {
               constraints: [
-                { kind: "literal", requirement: "preserve", value: "Acme" },
+                { kind: "literal", requirement: "preserve", value: "Rally" },
                 {
                   kind: "required-term",
                   requirement: "required-one-of",
@@ -1352,7 +1354,7 @@ describe("OpenAiTranslationProvider", () => {
         ],
         locale: "de",
       }),
-    ).resolves.toEqual([{ key: "action", translation: "Sie können Acme beantragen." }]);
+    ).resolves.toEqual([{ key: "action", translation: "Sie können Rally beantragen." }]);
 
     const responseFormat = JSON.stringify(
       (parse.mock.calls[0]?.[0].response_format as { json_schema?: unknown } | undefined)
@@ -1603,11 +1605,11 @@ describe("OpenAiTranslationProvider", () => {
 
       await provider.translateBatch({
         batch: [
-          createRequest("serp-title", "Acme comparison", {
+          createRequest("serp-title", "Rally comparison", {
             contentRole: "metadata-title",
             context: feedbackContext,
           }),
-          createRequest("serp-description", "Compare Acme for European fleets", {
+          createRequest("serp-description", "Compare Rally for European fleets", {
             contentRole: "metadata-description",
             context: feedbackContext,
           }),
@@ -1749,7 +1751,7 @@ describe("OpenAiTranslationProvider", () => {
     const result = await provider.translate({
       batchContext: {
         audience: "Fleet operators",
-        product: "Acme",
+        product: "Rally",
       },
       batchKey: "marketing-home",
       locale: "fr",
@@ -1762,7 +1764,7 @@ describe("OpenAiTranslationProvider", () => {
       messages: { content: string; role: string }[];
     };
     expect(request.messages[0]?.content).toContain("Project translation context:");
-    expect(request.messages[0]?.content).toContain("Product: Acme");
+    expect(request.messages[0]?.content).toContain("Product: Rally");
     expect(request.messages[0]?.content).toContain("Audience: Fleet operators");
 
     const payload: unknown = JSON.parse(request.messages[1]?.content ?? "{}");
@@ -1799,7 +1801,7 @@ describe("OpenAiTranslationProvider", () => {
     const sharedContext = {
       audience: "Fleet managers",
       notes: "Use formal voice.",
-      product: "Acme",
+      product: "Rally",
       purpose: "Landing page",
       tone: "Direct",
     };
@@ -1826,7 +1828,7 @@ describe("OpenAiTranslationProvider", () => {
       messages: { content: string; role: string }[];
     };
     expect(request.messages[0]?.content).toContain("Project translation context:");
-    expect(request.messages[0]?.content).toContain("Product: Acme");
+    expect(request.messages[0]?.content).toContain("Product: Rally");
     expect(request.messages[0]?.content).toContain("Audience: Fleet managers");
     expect(request.messages[0]?.content).toContain("Tone: Direct");
     expect(request.messages[0]?.content).toContain("Purpose: Landing page");
@@ -1843,7 +1845,7 @@ describe("OpenAiTranslationProvider", () => {
         {
           message: {
             parsed: {
-              translations: [{ key: "headline", translation: "Prepaid Acme" }],
+              translations: [{ key: "headline", translation: "Prepaid Rally" }],
             },
           },
         },
@@ -1868,7 +1870,7 @@ describe("OpenAiTranslationProvider", () => {
         {
           kind: "literal" as const,
           requirement: "preserve" as const,
-          value: "Acme",
+          value: "Rally",
         },
         {
           kind: "qualifier" as const,
@@ -1880,7 +1882,7 @@ describe("OpenAiTranslationProvider", () => {
     };
 
     await provider.translateBatch({
-      batch: [createRequest("headline", "Prepaid Acme", { context })],
+      batch: [createRequest("headline", "Prepaid Rally", { context })],
       locale: "nl",
     });
 
@@ -1893,7 +1895,7 @@ describe("OpenAiTranslationProvider", () => {
     expect(request.messages[0]?.content).toContain(
       "keep the protected source-literal slot exactly once through protectedAssembly; the host restores its exact value",
     );
-    expect(request.messages[0]?.content).not.toContain("preserve exactly: Acme");
+    expect(request.messages[0]?.content).not.toContain("preserve exactly: Rally");
     expect(request.messages[0]?.content).toContain(
       "preserve semantic scope: no-refundable-deposit; target-language realization examples (not exact required wording): geen terugbetaalbare borg | zonder terugbetaalbare borg",
     );
@@ -1920,10 +1922,10 @@ describe("OpenAiTranslationProvider", () => {
       ],
     }));
     const provider = new OpenAiTranslationProvider({ client }) as unknown as ExposedProvider;
-    const sharedContext = { product: "Acme", purpose: "Landing page" };
+    const sharedContext = { product: "Rally", purpose: "Landing page" };
     const divergentContext = {
       notes: "Correct a missing qualifier.",
-      product: "Acme",
+      product: "Rally",
       purpose: "Landing page",
     };
 
@@ -2033,7 +2035,7 @@ describe("OpenAiTranslationProvider", () => {
         },
       ],
       notes: `Rejected prior target: ${JSON.stringify(rejectedTarget)}`,
-      product: "Acme",
+      product: "Rally",
     };
 
     await provider.translate({
@@ -2373,7 +2375,7 @@ describe("OpenAiTranslationProvider", () => {
             parsed: {
               translations: {
                 brand: {
-                  translationParts: { part_0: "Nutzen Sie Acme", part_1: " heute." },
+                  translationParts: { part_0: "Nutzen Sie Rally", part_1: " heute." },
                 },
               },
             },
@@ -2385,13 +2387,13 @@ describe("OpenAiTranslationProvider", () => {
 
     const result = await provider.translateBatch({
       batch: [
-        createRequest("brand", "Use Acme today.", {
+        createRequest("brand", "Use Rally today.", {
           context: {
             constraints: [
               {
                 kind: "literal",
                 requirement: "preserve",
-                value: "Acme",
+                value: "Rally",
               },
             ],
           },
@@ -2400,7 +2402,7 @@ describe("OpenAiTranslationProvider", () => {
       locale: "de",
     });
 
-    expect(result).toEqual([{ key: "brand", translation: "Nutzen Sie Acme heute." }]);
+    expect(result).toEqual([{ key: "brand", translation: "Nutzen Sie Rally heute." }]);
     const request = parse.mock.calls[0]?.[0] as {
       messages: { content: string; role: string }[];
     };
@@ -2434,7 +2436,7 @@ describe("OpenAiTranslationProvider", () => {
           ?.json_schema,
       ),
     ).toContain("[^0-9\\\\s]");
-    expect(request.messages[0]?.content).not.toContain("Acme");
+    expect(request.messages[0]?.content).not.toContain("Rally");
   });
 
   it("turns shared preserve constraints into host-owned slots", async () => {
@@ -2455,16 +2457,16 @@ describe("OpenAiTranslationProvider", () => {
     }));
     const provider = new OpenAiTranslationProvider({ client }) as unknown as ExposedProvider;
     const batchContext = {
-      constraints: [{ kind: "literal", requirement: "preserve", value: "Acme" }] as const,
+      constraints: [{ kind: "literal", requirement: "preserve", value: "Rally" }] as const,
     };
 
     await expect(
       provider.translateBatch({
-        batch: [createRequest("brand", "Use Acme.")],
+        batch: [createRequest("brand", "Use Rally.")],
         batchContext,
         locale: "de",
       }),
-    ).resolves.toEqual([{ key: "brand", translation: "Nutzen Sie Acme." }]);
+    ).resolves.toEqual([{ key: "brand", translation: "Nutzen Sie Rally." }]);
 
     const request = parse.mock.calls[0]?.[0] as {
       messages: { content: string; role: string }[];
@@ -2501,15 +2503,15 @@ describe("OpenAiTranslationProvider", () => {
     await expect(
       provider.translateBatch({
         batch: [
-          createRequest("brand", "**Acme** offers **no deposit**.", {
+          createRequest("brand", "**Rally** offers **no deposit**.", {
             context: {
-              constraints: [{ kind: "literal", requirement: "preserve", value: "Acme" }],
+              constraints: [{ kind: "literal", requirement: "preserve", value: "Rally" }],
             },
           }),
         ],
         locale: "nl",
       }),
-    ).resolves.toEqual([{ key: "brand", translation: "**Acme** biedt **geen borg**." }]);
+    ).resolves.toEqual([{ key: "brand", translation: "**Rally** biedt **geen borg**." }]);
     const request = parse.mock.calls[0]?.[0] as {
       messages: { content: string; role: string }[];
       response_format?: { json_schema?: unknown };
@@ -2590,15 +2592,15 @@ describe("OpenAiTranslationProvider", () => {
     await expect(
       provider.translateBatch({
         batch: [
-          createRequest("brand", "Use **Acme** today.", {
+          createRequest("brand", "Use **Rally** today.", {
             context: {
-              constraints: [{ kind: "literal", requirement: "preserve", value: "Acme" }],
+              constraints: [{ kind: "literal", requirement: "preserve", value: "Rally" }],
             },
           }),
         ],
         locale: "nl",
       }),
-    ).resolves.toEqual([{ key: "brand", translation: "Gebruik **Acme** vandaag." }]);
+    ).resolves.toEqual([{ key: "brand", translation: "Gebruik **Rally** vandaag." }]);
   });
 
   it("rejects a protected candidate that drops a source clause boundary", async () => {
@@ -2612,7 +2614,7 @@ describe("OpenAiTranslationProvider", () => {
                   translationParts: {
                     part_0: "",
                     part_1: "Maak deze zin af",
-                    part_2: " Acme werkt.",
+                    part_2: " Rally werkt.",
                   },
                 },
               },
@@ -2625,7 +2627,7 @@ describe("OpenAiTranslationProvider", () => {
 
     await expect(
       provider.translateBatch({
-        batch: [createRequest("sentence", "**Finish this sentence.** Acme works.")],
+        batch: [createRequest("sentence", "**Finish this sentence.** Rally works.")],
         locale: "nl",
       }),
     ).resolves.toEqual([]);
@@ -2746,15 +2748,15 @@ describe("OpenAiTranslationProvider", () => {
     await expect(
       provider.translateBatch({
         batch: [
-          createRequest("brand", "Acme's option is prepaid.", {
+          createRequest("brand", "Rally's option is prepaid.", {
             context: {
-              constraints: [{ kind: "literal", requirement: "preserve", value: "Acme" }],
+              constraints: [{ kind: "literal", requirement: "preserve", value: "Rally" }],
             },
           }),
         ],
         locale: "de",
       }),
-    ).resolves.toEqual([{ key: "brand", translation: "Die Option von Acme ist vorausbezahlt." }]);
+    ).resolves.toEqual([{ key: "brand", translation: "Die Option von Rally ist vorausbezahlt." }]);
     const request = parse.mock.calls[0]?.[0] as {
       messages: { content: string; role: string }[];
     };
@@ -2784,11 +2786,11 @@ describe("OpenAiTranslationProvider", () => {
 
     const result = await provider.translateBatch({
       batch: [
-        createRequest("brand", "Acme AI and Acme.", {
+        createRequest("brand", "Rally AI and Rally.", {
           context: {
             constraints: [
-              { kind: "literal", requirement: "preserve", value: "Acme" },
-              { kind: "literal", requirement: "preserve", value: "Acme AI" },
+              { kind: "literal", requirement: "preserve", value: "Rally" },
+              { kind: "literal", requirement: "preserve", value: "Rally AI" },
             ],
           },
         }),
@@ -2796,7 +2798,7 @@ describe("OpenAiTranslationProvider", () => {
       locale: "de",
     });
 
-    expect(result).toEqual([{ key: "brand", translation: "Acme AI und Acme." }]);
+    expect(result).toEqual([{ key: "brand", translation: "Rally AI und Rally." }]);
     const request = parse.mock.calls[0]?.[0] as {
       messages: { content: string; role: string }[];
     };
@@ -2814,7 +2816,7 @@ describe("OpenAiTranslationProvider", () => {
         {
           message: {
             parsed: {
-              translations: [{ key: "brand", translation: "Acme." }],
+              translations: [{ key: "brand", translation: "Rally." }],
             },
           },
         },
@@ -2824,9 +2826,9 @@ describe("OpenAiTranslationProvider", () => {
 
     const result = await provider.translateBatch({
       batch: [
-        createRequest("brand", "Acme meets Acme.", {
+        createRequest("brand", "Rally meets Rally.", {
           context: {
-            constraints: [{ kind: "literal", requirement: "preserve", value: "Acme" }],
+            constraints: [{ kind: "literal", requirement: "preserve", value: "Rally" }],
           },
         }),
       ],
@@ -2843,7 +2845,7 @@ describe("OpenAiTranslationProvider", () => {
           message: {
             parsed: {
               translations: [
-                { key: "brand", translation: "Acme und {{AI_TRANSLATE_PRESERVE_0}}" },
+                { key: "brand", translation: "Rally und {{AI_TRANSLATE_PRESERVE_0}}" },
               ],
             },
           },
@@ -2854,9 +2856,9 @@ describe("OpenAiTranslationProvider", () => {
 
     const result = await provider.translateBatch({
       batch: [
-        createRequest("brand", "Use Acme", {
+        createRequest("brand", "Use Rally", {
           context: {
-            constraints: [{ kind: "literal", requirement: "preserve", value: "Acme" }],
+            constraints: [{ kind: "literal", requirement: "preserve", value: "Rally" }],
           },
         }),
       ],
@@ -3489,9 +3491,9 @@ describe("OpenAiTranslationProvider", () => {
     const result = await provider.translateBatch({
       batch: [
         createRequest("guide", "Read the [guide](/docs/fuel-card)."),
-        createRequest("brand", "Use Acme", {
+        createRequest("brand", "Use Rally", {
           context: {
-            constraints: [{ kind: "literal", requirement: "preserve", value: "Acme" }],
+            constraints: [{ kind: "literal", requirement: "preserve", value: "Rally" }],
           },
         }),
       ],
@@ -3510,7 +3512,7 @@ describe("OpenAiTranslationProvider", () => {
               translations: [
                 {
                   key: "brand",
-                  translation: "Acme {{AI_TRANSLATE_PRESERVE_0}}",
+                  translation: "Rally {{AI_TRANSLATE_PRESERVE_0}}",
                 },
               ],
             },
@@ -3522,16 +3524,16 @@ describe("OpenAiTranslationProvider", () => {
 
     const result = await provider.translateBatch({
       batch: [
-        createRequest("brand", "Use Acme", {
+        createRequest("brand", "Use Rally", {
           context: {
-            constraints: [{ kind: "literal", requirement: "preserve", value: "Acme" }],
+            constraints: [{ kind: "literal", requirement: "preserve", value: "Rally" }],
           },
         }),
       ],
       locale: "de",
     });
 
-    expect(result).toEqual([{ key: "brand", translation: "Acme" }]);
+    expect(result).toEqual([{ key: "brand", translation: "Rally" }]);
   });
 
   it("rejects duplicated raw protected literals when the sentinel is omitted", async () => {
@@ -3540,7 +3542,7 @@ describe("OpenAiTranslationProvider", () => {
         {
           message: {
             parsed: {
-              translations: [{ key: "brand", translation: "Acme und Acme" }],
+              translations: [{ key: "brand", translation: "Rally und Rally" }],
             },
           },
         },
@@ -3550,9 +3552,9 @@ describe("OpenAiTranslationProvider", () => {
 
     const result = await provider.translateBatch({
       batch: [
-        createRequest("brand", "Use Acme", {
+        createRequest("brand", "Use Rally", {
           context: {
-            constraints: [{ kind: "literal", requirement: "preserve", value: "Acme" }],
+            constraints: [{ kind: "literal", requirement: "preserve", value: "Rally" }],
           },
         }),
       ],
@@ -3568,7 +3570,7 @@ describe("OpenAiTranslationProvider", () => {
         {
           message: {
             parsed: {
-              translations: [{ key: "brand", translation: "Acmes Plattform" }],
+              translations: [{ key: "brand", translation: "Rallys Plattform" }],
             },
           },
         },
@@ -3578,9 +3580,9 @@ describe("OpenAiTranslationProvider", () => {
 
     const result = await provider.translateBatch({
       batch: [
-        createRequest("brand", "Acme's platform", {
+        createRequest("brand", "Rally's platform", {
           context: {
-            constraints: [{ kind: "literal", requirement: "preserve", value: "Acme" }],
+            constraints: [{ kind: "literal", requirement: "preserve", value: "Rally" }],
           },
         }),
       ],

@@ -108,7 +108,7 @@ export default defineConfig({
 
   provider: createOpenAiTranslationProvider({
     apiKey: process.env.OPENAI_API_KEY,
-    model: "gpt-5.4",
+    model: "gpt-5.6-luna",
   }),
 
   context: {

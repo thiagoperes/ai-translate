@@ -730,8 +730,7 @@ const DEFAULT_CONCURRENT_REQUESTS = 6;
 const DEFAULT_MAX_CHARS_PER_BATCH = 14_000;
 const DEFAULT_MAX_COMPLETION_TOKENS = 8_192;
 const DEFAULT_MAX_RETRIES = 3;
-const DEFAULT_MODEL = "gpt-5.4";
-const DEFAULT_TEMPERATURE = 0.1;
+const DEFAULT_MODEL = "gpt-5.6-luna";
 const DEFAULT_AUDIT_BATCH_SIZE = 50;
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 const MAX_RETRY_DELAY_MS = 60_000;
@@ -3076,7 +3075,15 @@ export class OpenAiTranslationProvider implements TranslationProvider {
   private readonly requestTimeoutMs: number;
   private readonly requestLimiter: RequestLimiter;
   private readonly systemPrompt: OpenAiSystemPrompt | undefined;
-  private readonly temperature: number;
+  /**
+   * Sent only when configured.
+   *
+   * Reasoning models reject any temperature but their default, so no
+   * provider-level value is both safe and meaningful: 0.1 for determinism
+   * would fail every request on {@link DEFAULT_MODEL}, and 1 would quietly
+   * loosen a non-reasoning model a caller chose for determinism.
+   */
+  private readonly temperature: number | undefined;
 
   constructor(options: OpenAiTranslationProviderOptions = {}) {
     if (!options.client && !options.apiKey) {
@@ -3115,7 +3122,7 @@ export class OpenAiTranslationProvider implements TranslationProvider {
     this.requestTimeoutMs = requestTimeoutMs;
     this.requestLimiter = new RequestLimiter(this.concurrentRequests);
     this.systemPrompt = options.systemPrompt;
-    this.temperature = options.temperature ?? DEFAULT_TEMPERATURE;
+    this.temperature = options.temperature;
   }
 
   async translate(args: {
