@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -15,80 +16,42 @@ interface PackageVitestConfigOptions {
 
 const workspaceRoot = path.dirname(fileURLToPath(import.meta.url));
 
-const workspaceAliases = [
-  {
-    find: /^@ai-translate\/cli$/u,
-    replacement: path.join(workspaceRoot, "packages/ai-translate-cli/src/index.ts"),
-  },
-  {
-    find: /^@ai-translate\/cli\/(.+)$/u,
-    replacement: path.join(workspaceRoot, "packages/ai-translate-cli/src/$1.ts"),
-  },
-  {
-    find: /^@ai-translate\/core$/u,
-    replacement: path.join(workspaceRoot, "packages/ai-translate-core/src/index.ts"),
-  },
-  {
-    find: /^@ai-translate\/core\/(.+)$/u,
-    replacement: path.join(workspaceRoot, "packages/ai-translate-core/src/$1.ts"),
-  },
-  {
-    find: /^@ai-translate\/fs-json$/u,
-    replacement: path.join(workspaceRoot, "packages/ai-translate-fs-json/src/index.ts"),
-  },
-  {
-    find: /^@ai-translate\/fs-json\/(.+)$/u,
-    replacement: path.join(workspaceRoot, "packages/ai-translate-fs-json/src/$1.ts"),
-  },
-  {
-    find: /^@ai-translate\/html$/u,
-    replacement: path.join(workspaceRoot, "packages/ai-translate-html/src/index.ts"),
-  },
-  {
-    find: /^@ai-translate\/html\/(.+)$/u,
-    replacement: path.join(workspaceRoot, "packages/ai-translate-html/src/$1.ts"),
-  },
-  {
-    find: /^@ai-translate\/keystatic$/u,
-    replacement: path.join(workspaceRoot, "packages/ai-translate-keystatic/src/index.ts"),
-  },
-  {
-    find: /^@ai-translate\/keystatic\/(.+)$/u,
-    replacement: path.join(workspaceRoot, "packages/ai-translate-keystatic/src/$1.ts"),
-  },
-  {
-    find: /^@ai-translate\/markdoc$/u,
-    replacement: path.join(workspaceRoot, "packages/ai-translate-markdoc/src/index.ts"),
-  },
-  {
-    find: /^@ai-translate\/markdoc\/(.+)$/u,
-    replacement: path.join(workspaceRoot, "packages/ai-translate-markdoc/src/$1.ts"),
-  },
-  {
-    find: /^@ai-translate\/provider-ai-sdk$/u,
-    replacement: path.join(workspaceRoot, "packages/ai-translate-provider-ai-sdk/src/index.ts"),
-  },
-  {
-    find: /^@ai-translate\/provider-ai-sdk\/(.+)$/u,
-    replacement: path.join(workspaceRoot, "packages/ai-translate-provider-ai-sdk/src/$1.ts"),
-  },
-  {
-    find: /^@ai-translate\/provider-core$/u,
-    replacement: path.join(workspaceRoot, "packages/ai-translate-provider-core/src/index.ts"),
-  },
-  {
-    find: /^@ai-translate\/provider-core\/(.+)$/u,
-    replacement: path.join(workspaceRoot, "packages/ai-translate-provider-core/src/$1.ts"),
-  },
-  {
-    find: /^@ai-translate\/provider-openai$/u,
-    replacement: path.join(workspaceRoot, "packages/ai-translate-provider-openai/src/index.ts"),
-  },
-  {
-    find: /^@ai-translate\/provider-openai\/(.+)$/u,
-    replacement: path.join(workspaceRoot, "packages/ai-translate-provider-openai/src/$1.ts"),
-  },
-];
+/**
+ * Tests import sibling packages by their published name, and must resolve them
+ * to `src` so a run reflects the working tree rather than whatever was last
+ * built. This list used to be written out by hand and drifted twice: a package
+ * missing an alias silently falls through to its stale `dist`, which still
+ * passes and hides the problem. Reading the workspace removes the chance.
+ */
+const workspaceAliases = readdirSync(path.join(workspaceRoot, "packages"), {
+  withFileTypes: true,
+})
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => {
+    const packageDir = path.join(workspaceRoot, "packages", entry.name);
+    const manifest: unknown = JSON.parse(
+      readFileSync(path.join(packageDir, "package.json"), "utf8"),
+    );
+    const name = (manifest as { name?: unknown }).name;
+    if (typeof name !== "string") {
+      throw new Error(`packages/${entry.name}/package.json declares no name.`);
+    }
+    return { name, packageDir };
+  })
+  .toSorted((a, b) => a.name.localeCompare(b.name))
+  .flatMap(({ name, packageDir }) => {
+    const escaped = name.replaceAll(/[$()*+.?[\\\]^{|}]/gu, "\\$&");
+    return [
+      {
+        find: new RegExp(`^${escaped}$`, "u"),
+        replacement: path.join(packageDir, "src/index.ts"),
+      },
+      {
+        find: new RegExp(`^${escaped}\\/(.+)$`, "u"),
+        replacement: path.join(packageDir, "src/$1.ts"),
+      },
+    ];
+  });
 
 function toDirectoryPath(packageUrl: URL | string): string {
   if (typeof packageUrl === "string") {

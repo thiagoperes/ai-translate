@@ -35,6 +35,8 @@
       "@ai-translate/keystatic/*": ["./packages/ai-translate-keystatic/src/*"],
       "@ai-translate/markdoc": ["./packages/ai-translate-markdoc/src/index.ts"],
       "@ai-translate/markdoc/*": ["./packages/ai-translate-markdoc/src/*"],
+      "@ai-translate/message-formats": ["./packages/ai-translate-message-formats/src/index.ts"],
+      "@ai-translate/message-formats/*": ["./packages/ai-translate-message-formats/src/*"],
       "@ai-translate/next": ["./packages/ai-translate-next/src/index.ts"],
       "@ai-translate/next/*": ["./packages/ai-translate-next/src/*"],
       "@ai-translate/provider-ai-sdk": ["./packages/ai-translate-provider-ai-sdk/src/index.ts"],

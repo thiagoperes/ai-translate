@@ -16,7 +16,7 @@
     "build": "pnpm -r --filter './packages/*' build",
     "prepare": "husky",
     "typecheck": "pnpm -r --filter './packages/*' typecheck",
-    "lint": "pnpm -r --filter './packages/*' lint && oxlint -c .oxlintrc.json --deny-warnings bench scripts vitest.base.ts",
+    "lint": "node scripts/check-workspace-wiring.mjs && pnpm -r --filter './packages/*' lint && oxlint -c .oxlintrc.json --deny-warnings bench scripts vitest.base.ts",
     "test": "pnpm -r --filter './packages/*' test",
     "coverage": "pnpm -r --parallel --filter './packages/*' coverage",
     "coverage:strict": "pnpm -r --parallel --filter './packages/*' coverage:strict",
@@ -24,7 +24,7 @@
     "bench": "pnpm run build && node --expose-gc ./bench/state.bench.mjs --scale 0.25 && node ./bench/prompt.bench.mjs",
     "bench:baseline": "pnpm run build && node --expose-gc ./bench/state.bench.mjs --scale 0.25 --json > ./bench/baseline.json",
     "bench:check": "pnpm run build && node --expose-gc ./bench/state.bench.mjs --scale 0.25 --baseline ./bench/baseline.json",
-    "validate": "pnpm run lint && pnpm run build && pnpm run typecheck && pnpm run test && pnpm run test:pack",
+    "validate": "pnpm run lint && pnpm run typecheck && pnpm run build && pnpm run test && pnpm run test:pack",
     "release:version": "changeset version",
     "release:publish": "changeset publish"
   },
