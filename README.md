@@ -216,7 +216,20 @@ pnpm lint
 
 The workspace development toolchain uses Node 24.15.0 (see [`.node-version`](.node-version)); published packages declare their own runtime requirements.
 
-Releases use [changesets](https://github.com/changesets/changesets): add one with `pnpm exec changeset`, run `pnpm release:version` on the reviewed release branch, and publishing happens from CI after the versioned changes reach `main`.
+Releases use [changesets](https://github.com/changesets/changesets). Add one
+with `pnpm exec changeset`, then version the release branch:
+
+```bash
+GITHUB_TOKEN="$(gh auth token)" pnpm release:version
+```
+
+The token is not optional — the changelog generator attributes each entry to its
+commit and author, and fails the whole command without one. Nothing is published
+locally: once the versioned changes reach `main`, the
+[Release workflow](.github/workflows/release.yml) publishes from CI using the
+`NPM_TOKEN` repository secret, with signed provenance. It can also be started by
+hand from the Actions tab, which is the way to retry a release that failed for a
+reason outside the tree.
 
 ## License
 

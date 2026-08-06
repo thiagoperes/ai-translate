@@ -94,16 +94,34 @@ jobs:
           if ! git show-ref --verify --quiet refs/heads/main; then
             git fetch origin main:main
           fi
-      - uses: pnpm/action-setup@v6
+      # `changeset version` consumes every changeset and writes the changelogs in
+      # one commit, so on a release branch `changeset status` sees changed
+      # packages with no changesets left and fails by construction. A generated
+      # CHANGELOG.md is the one thing only `changeset version` produces, which
+      # separates a release branch from a feature branch that forgot its notes.
+      - id: kind
+        name: Detect a release branch
+        run: |
+          if git diff --name-only main...HEAD | grep -qE '^packages/[^/]+/CHANGELOG\.md$'; then
+            echo "Release branch: changelogs are generated, so the changesets are already spent."
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.kind.outputs.release != 'true'
+        uses: pnpm/action-setup@v6
         with:
           version: 10.32.1
-      - uses: actions/setup-node@v6
+      - if: steps.kind.outputs.release != 'true'
+        uses: actions/setup-node@v6
         with:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
           node-version: 22.23.1
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm exec changeset status
+      - if: steps.kind.outputs.release != 'true'
+        run: pnpm install --frozen-lockfile
+      - if: steps.kind.outputs.release != 'true'
+        run: pnpm exec changeset status
 
   workflow-lint:
     name: GitHub Actions Syntax Check

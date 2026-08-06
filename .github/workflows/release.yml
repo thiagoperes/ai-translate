@@ -6,6 +6,12 @@ on:
       - main
     paths:
       - "packages/*/package.json"
+  # A release that fails for a reason outside the tree — a missing or expired
+  # credential, a registry outage, a dropped webhook — was otherwise only
+  # retryable by pushing an empty change to a package.json. Publishing is
+  # idempotent, because `changeset publish` skips versions the registry already
+  # has, so re-running by hand is safe.
+  workflow_dispatch:
 
 permissions:
   contents: read
