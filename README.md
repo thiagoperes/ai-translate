@@ -1,32 +1,29 @@
 # ai-translate
 
-**AI translation and localization for JSON, Markdoc, and HTML content — incremental, validated, and safe to run in CI.**
+**AI-powered localization for JSON, Markdoc, HTML, and Next.js content — incremental, validated, and built for CI.**
 
 [![CI](https://github.com/thiagoperes/ai-translate/actions/workflows/ci.yml/badge.svg)](https://github.com/thiagoperes/ai-translate/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A520.19-brightgreen.svg)](#install)
 
-`ai-translate` is a TypeScript toolkit and CLI that keeps a multi-language website or app translated from a single source locale. You write content in one language; it works out which strings are new, changed, or no longer valid under the current translation contract, sends only those to an LLM, checks every candidate before it reaches disk, and records enough provenance that the next run can prove what is still current.
+`ai-translate` is a TypeScript toolkit and CLI for keeping every locale in sync with a single source locale. It detects only new or changed content, sends just that work to your translation provider, validates every candidate before writing it, and records provenance so CI can prove translations are current—without retranslating unchanged content or overwriting human corrections.
+
+Key features:
+
+| | |
+| --- | --- |
+| ⚡ **Incremental** | Translate only new or changed strings. |
+| 🛡️ **Validated** | Protect placeholders, tags, glossary terms, and structure. |
+| ✅ **CI-ready** | Catch stale locales with a read-only `check`. |
+| 🧩 **Flexible** | Supports JSON, Markdoc, HTML, ICU, i18next, and Next.js. |
+| ✍️ **Human-friendly** | Preserve manual edits with atomic writes. |
+| 📈 **Scalable** | Use sharded state, scoped runs, and pluggable providers. |
 
 ```bash
 npx ai-translate sync --dry-run   # what would be translated, and why
 npx ai-translate sync             # translate, validate, write
 npx ai-translate check            # CI gate: fails if a locale is behind
 ```
-
-## Features
-
-- **Incremental by design.** Every entry stores a digest of its source text, its resolved context, and the contract that generated it. Change one heading and one heading is sent — not the file, not the locale.
-- **Validated before anything is written.** Placeholder and tag parity, glossary and forbidden terms, preserved numbers, currencies, dates, and links, plus any validator you add.
-- **Semantic audits.** An optional second model pass, forward and adversarial, catches meaning that was narrowed, broadened, omitted, or contradicted.
-- **A CI gate that costs nothing.** `ai-translate check` runs validation, a dry-run sync, and a provenance check without calling the model or writing a byte, then exits non-zero if a locale is stale.
-- **JSON, Markdoc, and HTML out of the box.** Nested namespace files, frontmatter, inline tokens and tag attributes, text nodes and translatable attributes.
-- **Drop-in for Next.js.** `ai-translate init` detects next-intl or i18next, infers locales and message layout, and writes the config. ICU and i18next messages are validated as structures, and locale-specific plural forms are generated and translated.
-- **Your manual edits survive.** A hand-corrected translation is recorded as `manual` and honoured on later runs instead of being silently overwritten.
-- **Atomic runs.** Content files and translation state are committed in one transaction, so an interrupted or failing sync leaves the working tree untouched.
-- **Work on a slice.** `--locale`, `--catalog`, `--unit`, and `--include-path` scope a run to exactly what you are changing.
-- **Built for large catalogs.** Sharded state and locale-scoped loads hold a single-locale check to 7.9 MB of heap on a 246,000-entry corpus.
-- **Pluggable end to end.** Catalog adapters, translation providers, audit providers, and state stores are plain TypeScript interfaces.
 
 ## Why this exists
 

@@ -1,0 +1,12 @@
+* text=auto eol=lf
+
+*.json linguist-language=JSON
+*.md linguist-language=Markdown
+*.mjs linguist-language=JavaScript
+*.ts linguist-language=TypeScript
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary

@@ -1,0 +1,6 @@
+# Default ownership keeps security-sensitive and release changes reviewed.
+* @thiagoperes
+
+.github/ @thiagoperes
+package.json @thiagoperes
+pnpm-lock.yaml @thiagoperes
