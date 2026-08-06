@@ -19,16 +19,30 @@ concurrency:
 # locally on branches and reviewed before they reach main. This workflow has
 # no pull-request permission and cannot create or update a pull request.
 #
-# Code quality (lint, typecheck, tests,
-# coverage, translate:check) is owned by the "Pull Request Quality Checks"
-# workflow, which already runs on every PR, merge group, and push to main —
-# duplicating it here doubled CI time on every push for no extra safety.
+# Code quality (lint, typecheck, tests, coverage) is owned by the "CI"
+# workflow, which already runs on every pull request, merge group, and push to
+# main — duplicating it here doubled CI time on every push for no extra safety.
 jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
+      # Without a credential, `changeset publish` still installs, builds, and
+      # packs every package before dying in a per-package ENEEDAUTH dump that
+      # buries the one fact that matters. Checking first turns a slow, unclear
+      # failure into an immediate, actionable one.
+      - name: Require a publish credential
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::error::No NPM_TOKEN secret is set, so nothing can be published."
+            echo "Create a granular access token on npmjs.com with write access to the"
+            echo "@ai-translate scope, then add it as the NPM_TOKEN repository secret:"
+            echo "  gh secret set NPM_TOKEN --repo ${{ github.repository }}"
+            exit 1
+          fi
       - uses: pnpm/action-setup@v6
         with:
           version: 10.32.1
@@ -36,8 +50,8 @@ jobs:
         with:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-          # npm trusted publishing requires npm >=11.5.1. Node 24.15.0 ships
-          # npm 11.12.1 and is part of this repository's supported engines.
+          # Signed provenance needs a recent npm. Node 24.15.0 ships npm 11.12.1
+          # and is part of this repository's supported engines.
           node-version: 24.15.0
           registry-url: "https://registry.npmjs.org"
       - run: pnpm install --frozen-lockfile
@@ -61,6 +75,9 @@ jobs:
             console.log("Skipping publish. Still at 0.0.0: " + placeholder.join(", ") + ". Run pnpm release:version first.");
           }
           '
+      # The token authenticates; `id-token: write` plus NPM_CONFIG_PROVENANCE is
+      # what attaches a signed provenance attestation to each published version.
+      # They are separate mechanisms, and both are wanted here.
       - if: steps.guard.outputs.publish == 'true'
         run: pnpm release:publish
         env:

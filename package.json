@@ -19,7 +19,7 @@
     "lint": "pnpm -r --filter './packages/*' lint && oxlint -c .oxlintrc.json --deny-warnings bench scripts vitest.base.ts",
     "test": "pnpm -r --filter './packages/*' test",
     "coverage": "pnpm -r --parallel --filter './packages/*' coverage",
-    "coverage:strict": "pnpm -r --parallel --filter '@ai-translate/cli' --filter '@ai-translate/core' --filter '@ai-translate/keystatic' --filter '@ai-translate/provider-openai' coverage:strict",
+    "coverage:strict": "pnpm -r --parallel --filter './packages/*' coverage:strict",
     "test:pack": "pnpm -r --filter './packages/*' test:pack && node ./scripts/package-smoke.mjs",
     "bench": "pnpm run build && node --expose-gc ./bench/state.bench.mjs --scale 0.25 && node ./bench/prompt.bench.mjs",
     "bench:baseline": "pnpm run build && node --expose-gc ./bench/state.bench.mjs --scale 0.25 --json > ./bench/baseline.json",
