@@ -4,12 +4,17 @@ import * as path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createDetectionContext } from "../src/context";
+import { createDetectionContext, dependencyNames } from "../src/context";
 import type { DetectedSetup } from "../src/types";
 import { detectProject } from "../src/detect";
 import { i18nextIntegration } from "../src/integrations/i18next";
 import { nextIntlIntegration } from "../src/integrations/next-intl";
-import { isLocaleTag, readStringArrayLiteral, readStringLiteral } from "../src/locales";
+import {
+  isLocaleTag,
+  readStringArrayLiteral,
+  readStringLiteral,
+  resolveSourceLocale,
+} from "../src/locales";
 import { renderConfig } from "../src/render-config";
 
 const workspaces: string[] = [];
@@ -54,6 +59,52 @@ describe("isLocaleTag", () => {
       expect(isLocaleTag(name)).toBe(false);
     },
   );
+
+  it.each(["en-", "pt--BR", "en-@@"])("rejects %s rather than throwing", (name) => {
+    // A well-shaped primary subtag can still carry a malformed suffix, which
+    // makes Intl throw rather than return an empty list.
+    expect(isLocaleTag(name)).toBe(false);
+  });
+});
+
+describe("resolveSourceLocale", () => {
+  it("prefers the declared default when the project lists it", () => {
+    expect(resolveSourceLocale(["de", "en", "fr"], "de")).toBe("de");
+  });
+
+  it("ignores a declared default the locale list does not contain", () => {
+    // next-intl projects sometimes keep a defaultLocale for a locale they have
+    // since removed; the list on disk is the authority.
+    expect(resolveSourceLocale(["de", "fr"], "en")).toBe("de");
+  });
+
+  it("falls back to English before the first locale", () => {
+    expect(resolveSourceLocale(["de", "en", "fr"], null)).toBe("en");
+  });
+
+  it("has no source locale to offer when the list is empty", () => {
+    expect(resolveSourceLocale([], null)).toBeNull();
+  });
+});
+
+describe("detection context", () => {
+  it("reports no manifest when the project has none", async () => {
+    const context = createDetectionContext(await seedProject({ "readme.md": "" }));
+    expect(await context.packageJson()).toBeNull();
+    expect(await dependencyNames(context)).toEqual(new Set());
+  });
+
+  it("treats an unparsable manifest as absent rather than failing detection", async () => {
+    // A project mid-edit should degrade to "nothing detected", not crash the
+    // CLI with a JSON syntax error.
+    const context = createDetectionContext(await seedProject({ "package.json": "{ oops" }));
+    expect(await context.packageJson()).toBeNull();
+  });
+
+  it("treats a non-object manifest as absent", async () => {
+    const context = createDetectionContext(await seedProject({ "package.json": "null" }));
+    expect(await context.packageJson()).toBeNull();
+  });
 });
 
 describe("literal readers", () => {
@@ -177,6 +228,51 @@ describe("i18next detection", () => {
     expect(await detectProject(root)).toEqual([]);
   });
 
+  it("ignores a project that depends on i18next but keeps no locale tree", async () => {
+    const root = await seedProject({
+      "package.json": JSON.stringify({ dependencies: { i18next: "23.0.0" } }),
+    });
+
+    expect(await detectProject(root)).toEqual([]);
+  });
+
+  it("keeps the directory locales when the declared list holds only pseudo-locales", async () => {
+    // `default` is a routing placeholder, not a language. Taking the declared
+    // list literally would drop every real locale on disk.
+    const root = await seedProject({
+      "next-i18next.config.js": 'module.exports = { locales: ["default"] };',
+      "package.json": JSON.stringify({ dependencies: { i18next: "23.0.0" } }),
+      "public/locales/en/common.json": MESSAGES,
+      "public/locales/nl/common.json": MESSAGES,
+    });
+
+    expect(requireBest(await detectProject(root)).plan.targetLocales).toEqual(["nl"]);
+  });
+
+  it("drops non-locale entries from a declared list but keeps the rest", async () => {
+    const root = await seedProject({
+      "next-i18next.config.js": 'module.exports = { locales: ["en", "default", "nl"] };',
+      "package.json": JSON.stringify({ dependencies: { i18next: "23.0.0" } }),
+      "public/locales/en/common.json": MESSAGES,
+    });
+
+    expect(requireBest(await detectProject(root)).plan.targetLocales).toEqual(["nl"]);
+  });
+
+  it("infers locales from directories when no settings module exists", async () => {
+    const root = await seedProject({
+      "package.json": JSON.stringify({ dependencies: { "next-i18next": "15.0.0" } }),
+      "public/locales/en/common.json": MESSAGES,
+      "public/locales/fr/common.json": MESSAGES,
+    });
+
+    const detected = requireBest(await detectProject(root));
+
+    expect(detected.confidence).toBeLessThan(0.9);
+    expect(detected.plan.warnings).toHaveLength(1);
+    expect(detected.plan.targetLocales).toEqual(["fr"]);
+  });
+
   it("reports both integrations for a project mid-migration, best first", async () => {
     const root = await seedProject({
       "i18n/request.ts": "export default getRequestConfig(async () => ({}));",
@@ -225,6 +321,21 @@ describe("renderConfig", () => {
     expect(config).toContain("messageFormat: icuMessageFormat,");
     // ICU encodes plurals inside the message, so no key strategy belongs here.
     expect(config).not.toContain("plurals:");
+  });
+
+  it("breaks a long locale list across lines so it stays reviewable", async () => {
+    const locales = ["en", "de", "el", "es", "et", "fi", "fr", "ga", "hr", "it", "lt", "lv", "nl"];
+    const root = await seedProject({
+      "package.json": JSON.stringify({ dependencies: { i18next: "23.0.0" } }),
+      ...Object.fromEntries(
+        locales.map((locale) => [`public/locales/${locale}/common.json`, MESSAGES]),
+      ),
+    });
+
+    const config = renderConfig(requireBest(await detectProject(root)).plan);
+
+    expect(config).toContain('const targetLocales = [\n  "de",\n');
+    expect(config).toContain('  "nl",\n];');
   });
 
   it("turns warnings into TODO comments rather than dropping them", async () => {

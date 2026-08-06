@@ -30,11 +30,8 @@ export function isLocaleTag(name: string): boolean {
     return false;
   }
 
-  const [primary = "", ...rest] = name.split("-");
+  const [primary = ""] = name.split("-");
   if (!/^[A-Za-z]{2,3}$/.test(primary)) {
-    return false;
-  }
-  if (rest.length === 0 && primary.length > 3) {
     return false;
   }
 

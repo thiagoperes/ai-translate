@@ -32,6 +32,46 @@ describe("i18nextMessageFormat", () => {
       "i18next-nesting-mismatch",
     ]);
   });
+
+  it("accepts several nesting calls whose order the translation changes", () => {
+    // German puts the verb last, so a faithful translation reorders the two
+    // calls. Comparing them as a sorted set keeps that from reading as a loss.
+    expect(
+      codes(
+        "$t(common:save) or $t(common:cancel)",
+        "$t(common:cancel) oder $t(common:save)",
+      ),
+    ).toEqual([]);
+  });
+
+  it("rejects one substituted call among several", () => {
+    expect(
+      codes(
+        "$t(common:save) or $t(common:cancel)",
+        "$t(common:speichern) oder $t(common:cancel)",
+      ),
+    ).toEqual(["i18next-nesting-mismatch"]);
+  });
+});
+
+describe("i18nextPluralKeys", () => {
+  it("names keys with the suffix i18next resolves at runtime", () => {
+    expect(i18nextPluralKeys.formatKey("items", "one")).toBe("items_one");
+    expect(i18nextPluralKeys.formatKey("items", "other")).toBe("items_other");
+  });
+
+  it("asks the locale, not the source, which categories a file needs", () => {
+    expect(i18nextPluralKeys.categoriesFor("pl")).toEqual(["one", "few", "many", "other"]);
+    expect(i18nextPluralKeys.categoriesFor("ja")).toEqual(["other"]);
+  });
+
+  it("orders groups by base so expansion writes files deterministically", () => {
+    expect(
+      i18nextPluralKeys
+        .groupKeys(["zebras_one", "zebras_other", "apples_one", "apples_other"])
+        .map((group) => group.base),
+    ).toEqual(["apples", "zebras"]);
+  });
 });
 
 describe("i18nextPluralKeys.groupKeys", () => {

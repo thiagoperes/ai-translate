@@ -88,8 +88,13 @@ export const i18nextIntegration: Integration = defineIntegration({
         readStringLiteral(source, "fallbackLng");
       const declared =
         readStringArrayLiteral(source, "languages") ?? readStringArrayLiteral(source, "locales");
-      if (declared !== null) {
-        locales = declared;
+      // A declared list is more authoritative than directory names, but only
+      // for the entries that are locales: these arrays routinely carry
+      // pseudo-locales like `default`. If filtering leaves nothing, the
+      // directories are the better answer.
+      const declaredLocales = declared === null ? [] : localesFromNames(declared);
+      if (declaredLocales.length > 0) {
+        locales = declaredLocales;
       }
       evidence.push({ detail: "i18next settings module", source: settingsPath });
     }
