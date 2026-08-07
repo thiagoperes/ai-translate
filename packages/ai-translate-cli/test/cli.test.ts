@@ -605,7 +605,43 @@ describe("runCli", { concurrent: false }, () => {
     );
   });
 
-  it("imports startup-v1 state through the migrate-state command", async () => {
+  it("seeds state from existing translations through the adopt command", async () => {
+    const { cwd, localesDir } = await createWorkspace();
+    await fs.mkdir(path.join(localesDir, "fr"), { recursive: true });
+    await fs.writeFile(
+      path.join(localesDir, "fr", "common.json"),
+      JSON.stringify({ cta: "Commencer" }),
+      "utf8",
+    );
+    const config = createConfig(cwd, {
+      translate({ requests }) {
+        return Promise.resolve(
+          requests.map((request) => ({
+            key: request.key,
+            translation: request.sourceText,
+          })),
+        );
+      },
+    });
+    const { stdoutSpy } = mockConsole();
+
+    vi.spyOn(configModule, "loadEnvFiles").mockResolvedValue({});
+    vi.spyOn(configModule, "loadConfig").mockResolvedValue({
+      config,
+      configPath: path.join(cwd, "ai-translate.config.ts"),
+    });
+
+    const exitCode = await runCli(["adopt"], cwd);
+
+    expect(exitCode).toBe(0);
+    expect(stdoutSpy).toHaveBeenCalled();
+    const stateFile = JSON.parse(
+      await fs.readFile(path.join(cwd, ".ai-translate", "translation-state.json"), "utf8"),
+    ) as { entries: Record<string, { origin: string }> };
+    expect(stateFile.entries["fr::namespace-json::common::/cta"]?.origin).toBe("legacy-unknown");
+  });
+
+  it("writes no state when adopt runs as a dry run", async () => {
     const { cwd } = await createWorkspace();
     const config = createConfig(cwd, {
       translate({ requests }) {
@@ -617,22 +653,6 @@ describe("runCli", { concurrent: false }, () => {
         );
       },
     });
-    await fs.writeFile(
-      path.join(cwd, "legacy-lock.json"),
-      JSON.stringify({
-        hashes: {
-          common: {
-            cta: "legacy",
-          },
-        },
-        overrides: {
-          common: {
-            cta: true,
-          },
-        },
-      }),
-      "utf8",
-    );
     const { stdoutSpy } = mockConsole();
 
     vi.spyOn(configModule, "loadEnvFiles").mockResolvedValue({});
@@ -641,28 +661,24 @@ describe("runCli", { concurrent: false }, () => {
       configPath: path.join(cwd, "ai-translate.config.ts"),
     });
 
-    const exitCode = await runCli(
-      ["migrate-state", "--from", "startup-v1", "--legacy-file=./legacy-lock.json"],
-      cwd,
-    );
+    const exitCode = await runCli(["adopt", "--dry-run"], cwd);
 
     expect(exitCode).toBe(0);
-    expect(stdoutSpy).toHaveBeenCalled();
-    const stateFile = JSON.parse(
-      await fs.readFile(path.join(cwd, ".ai-translate", "translation-state.json"), "utf8"),
-    ) as { entries: Record<string, { origin: string }> };
-    expect(stateFile.entries["fr::namespace-json::common::/cta"]?.origin).toBe("legacy-unknown");
+    expect(stdoutSpy.mock.calls[0]?.[0]).toContain('"dryRun": true');
+    await expect(
+      fs.readFile(path.join(cwd, ".ai-translate", "translation-state.json"), "utf8"),
+    ).rejects.toThrow();
   });
 
-  it("rejects unsupported migrate-state sources", async () => {
+  it("rejects an unsupported --identical-to-source value", async () => {
     const { cwd } = await createWorkspace();
     const { stderrSpy } = mockConsole();
 
-    const exitCode = await runCli(["migrate-state", "--from", "legacy-v0"], cwd);
+    const exitCode = await runCli(["adopt", "--identical-to-source", "maybe"], cwd);
 
     expect(exitCode).toBe(1);
     expect(stderrSpy).toHaveBeenCalledWith(
-      'The "migrate-state" command currently only supports --from startup-v1.',
+      'Option "--identical-to-source" accepts "adopt" or "skip", not "maybe".',
     );
   });
 

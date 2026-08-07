@@ -1,5 +1,3 @@
-import * as path from "node:path";
-
 import type { AiTranslateConfig, SyncResult } from "@ai-translate/core/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -20,7 +18,7 @@ const mockValidateCatalogs = vi.hoisted(() => vi.fn());
 const mockWithTranslationIssueCache = vi.hoisted(() =>
   vi.fn((operation: () => Promise<unknown>) => operation()),
 );
-const mockImportStartupV1State = vi.hoisted(() => vi.fn());
+const mockAdoptExistingTranslations = vi.hoisted(() => vi.fn());
 const mockLoadConfig = vi.hoisted(() => vi.fn());
 const mockLoadEnvFiles = vi.hoisted(() => vi.fn());
 
@@ -33,7 +31,7 @@ vi.mock("@ai-translate/core", () => ({
 }));
 
 vi.mock("@ai-translate/fs-json", () => ({
-  importStartupV1State: mockImportStartupV1State,
+  adoptExistingTranslations: mockAdoptExistingTranslations,
 }));
 
 vi.mock("../src/config", () => ({
@@ -925,17 +923,7 @@ describe("runCli branch coverage", () => {
     );
   });
 
-  it("migrates startup-v1 state with an explicit legacy file path", async () => {
-    const { stderrSpy, stdoutSpy } = spyOnConsole();
-    const save = vi.fn().mockResolvedValue(undefined);
-    const importedState = {
-      entries: {
-        "fr::json::common::/cta": {
-          origin: "legacy",
-        },
-      },
-      version: 2,
-    };
+  function stubAdoptWorkspace(save: ReturnType<typeof vi.fn>) {
     const config = createConfig({
       catalogs: [
         {
@@ -955,37 +943,74 @@ describe("runCli branch coverage", () => {
       config,
       configPath: "/repo/ai-translate.config.ts",
     });
-    mockImportStartupV1State.mockResolvedValue(importedState);
 
-    expect(
-      await runCli(
-        ["migrate-state", "--from=startup-v1", "--legacy-file", "custom/translation-lock.json"],
-        "/repo",
-      ),
-    ).toBe(0);
+    return config;
+  }
 
-    expect(mockImportStartupV1State).toHaveBeenCalledWith({
+  const adoptedState = {
+    entries: {
+      "fr::json::common::/cta": {
+        origin: "legacy-unknown",
+      },
+    },
+    version: 2,
+  };
+
+  it("adopts existing translations and reports what it found", async () => {
+    const { stderrSpy, stdoutSpy } = spyOnConsole();
+    const save = vi.fn().mockResolvedValue(undefined);
+    const config = stubAdoptWorkspace(save);
+    mockAdoptExistingTranslations.mockResolvedValue({
+      adopted: 1,
+      identicalToSource: 2,
+      state: adoptedState,
+      untranslated: 3,
+    });
+
+    expect(await runCli(["adopt"], "/repo")).toBe(0);
+
+    expect(mockAdoptExistingTranslations).toHaveBeenCalledWith({
       catalogs: config.catalogs,
-      legacyFilePath: path.resolve("/repo", "custom/translation-lock.json"),
+      identicalToSource: "adopt",
       sourceLocale: "en",
       targetLocales: ["fr", "de"],
     });
-    expect(save).toHaveBeenCalledWith(importedState);
+    expect(save).toHaveBeenCalledWith(adoptedState);
     expect(JSON.parse(stdoutSpy.mock.calls[0]?.[0] as string)).toEqual({
-      entries: 1,
+      adopted: 1,
+      dryRun: false,
+      identicalToSource: 2,
       status: "ok",
+      untranslated: 3,
     });
     expect(stderrSpy).not.toHaveBeenCalled();
   });
 
-  it("rejects unsupported migrate-state sources", async () => {
-    const { stderrSpy } = spyOnConsole();
+  it("forwards an explicit identical-to-source policy and skips the write on a dry run", async () => {
+    const { stdoutSpy } = spyOnConsole();
+    const save = vi.fn().mockResolvedValue(undefined);
+    const config = stubAdoptWorkspace(save);
+    mockAdoptExistingTranslations.mockResolvedValue({
+      adopted: 0,
+      identicalToSource: 0,
+      state: adoptedState,
+      untranslated: 0,
+    });
 
-    expect(await runCli(["migrate-state", "--from", "legacy-v0"], "/repo")).toBe(1);
+    expect(
+      await runCli(["adopt", "--identical-to-source=skip", "--dry-run"], "/repo"),
+    ).toBe(0);
 
-    expect(stderrSpy).toHaveBeenCalledWith(
-      'The "migrate-state" command currently only supports --from startup-v1.',
-    );
+    expect(mockAdoptExistingTranslations).toHaveBeenCalledWith({
+      catalogs: config.catalogs,
+      identicalToSource: "skip",
+      sourceLocale: "en",
+      targetLocales: ["fr", "de"],
+    });
+    expect(save).not.toHaveBeenCalled();
+    expect(JSON.parse(stdoutSpy.mock.calls[0]?.[0] as string)).toMatchObject({
+      dryRun: true,
+    });
   });
 
   it("reports parse and command errors", async () => {

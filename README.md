@@ -164,7 +164,7 @@ Then wire the gate into CI:
 | `audit` | Run or refresh semantic audits over existing translations. |
 | `new-locale <locale>` | Scaffold a new locale and translate it in one transaction. |
 | `scaffold-locale <locale> --from <locale>` | Create the files for a locale without translating. |
-| `migrate-state --from startup-v1` | Import a legacy lock file into translation state. |
+| `adopt` | Seed state from translations an earlier tool already produced, so the first sync only fills real gaps. |
 
 Every command accepts `--config` plus the scoping flags above. See the [CLI README](packages/ai-translate-cli/README.md) for the full flag reference.
 

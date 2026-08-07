@@ -4,7 +4,13 @@ import { promises as fs } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { createJsonStateStore, createNamespaceJsonCatalog, importStartupV1State } from "../src/index";
+import { digestValue } from "@ai-translate/core/hash";
+
+import {
+  adoptExistingTranslations,
+  createJsonStateStore,
+  createNamespaceJsonCatalog,
+} from "../src/index";
 import { reconcileJsonRoot } from "../src/shared";
 
 describe("json state store", () => {
@@ -70,72 +76,135 @@ describe("json state store", () => {
     expect(loaded.entries["fr::common::/cta"]?.targetDigest).toBe("b");
   });
 
-  it("imports startup v1 hashes as legacy-aware state", async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-translate-import-"));
-    const localesDir = path.join(rootDir, "locales");
-    await fs.mkdir(path.join(localesDir, "en"), { recursive: true });
-    await fs.mkdir(path.join(localesDir, "fr"), { recursive: true });
+  describe("adoptExistingTranslations", () => {
+    async function seedCatalog(source: unknown, target: unknown) {
+      const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-translate-adopt-"));
+      const localesDir = path.join(rootDir, "locales");
+      await fs.mkdir(path.join(localesDir, "en"), { recursive: true });
+      await fs.mkdir(path.join(localesDir, "fr"), { recursive: true });
+      await fs.writeFile(
+        path.join(localesDir, "en", "common.json"),
+        JSON.stringify(source),
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(localesDir, "fr", "common.json"),
+        JSON.stringify(target),
+        "utf8",
+      );
 
-    await fs.writeFile(
-      path.join(localesDir, "en", "common.json"),
-      JSON.stringify({
-        greeting: "Hello",
-        shortcuts: {
-          profile: "⇧⌘P",
-        },
-      }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(localesDir, "fr", "common.json"),
-      JSON.stringify({
-        greeting: "Bonjour",
-        shortcuts: {
-          profile: "⇧⌘P",
-        },
-      }),
-      "utf8",
-    );
-    const legacyFilePath = path.join(rootDir, "translation-lock.json");
-    await fs.writeFile(
-      legacyFilePath,
-      JSON.stringify({
-        hashes: {
-          common: {
-            greeting: "legacy-hash",
-          },
-        },
-        overrides: {
-          common: {
-            greeting: true,
-          },
-        },
-      }),
-      "utf8",
-    );
+      return createNamespaceJsonCatalog({ rootDir: localesDir, sourceLocale: "en" });
+    }
 
-    const catalog = createNamespaceJsonCatalog({
-      rootDir: localesDir,
-      sourceLocale: "en",
+    it("records translated text as legacy-unknown, since the catalogs carry no provenance", async () => {
+      const catalog = await seedCatalog(
+        { greeting: "Hello", shortcuts: { profile: "Profile" } },
+        { greeting: "Bonjour", shortcuts: { profile: "Profil" } },
+      );
+
+      const result = await adoptExistingTranslations({
+        catalogs: [catalog],
+        sourceLocale: "en",
+        targetLocales: ["fr"],
+      });
+
+      expect(result.adopted).toBe(2);
+      expect(result.untranslated).toBe(0);
+      expect(result.identicalToSource).toBe(0);
+      expect(result.state.version).toBe(2);
+
+      const entry = result.state.entries["fr::namespace-json::common::/greeting"];
+      expect(entry?.origin).toBe("legacy-unknown");
+      expect(entry?.status).toBe("synced");
+      expect(entry?.catalogId).toBe("namespace-json");
+      expect(entry?.targetDigest).toBe(digestValue("Bonjour"));
+      expect(entry?.sourceDigest).toBe(digestValue("Hello"));
     });
 
-    const imported = await importStartupV1State({
-      catalogs: [catalog],
-      legacyFilePath,
-      sourceLocale: "en",
-      targetLocales: ["fr"],
+    it("leaves missing and blank targets out of state so the next sync still translates them", async () => {
+      const catalog = await seedCatalog(
+        { blank: "Save", missing: "Cancel", present: "Hello" },
+        { blank: "", present: "Bonjour" },
+      );
+
+      const result = await adoptExistingTranslations({
+        catalogs: [catalog],
+        sourceLocale: "en",
+        targetLocales: ["fr"],
+      });
+
+      expect(result.adopted).toBe(1);
+      expect(result.untranslated).toBe(2);
+      expect(Object.keys(result.state.entries)).toEqual([
+        "fr::namespace-json::common::/present",
+      ]);
     });
 
-    expect(imported.entries["fr::namespace-json::common::/greeting"]?.origin).toBe(
-      "legacy-unknown",
-    );
-    expect(imported.entries["fr::namespace-json::common::/greeting"]?.catalogId).toBe(
-      "namespace-json",
-    );
-    expect(
-      imported.entries["fr::namespace-json::common::/shortcuts/profile"]?.origin,
-    ).toBe("generated");
-    expect(imported.version).toBe(2);
+    it("adopts targets identical to the source by default", async () => {
+      const catalog = await seedCatalog(
+        { brand: "Excel", greeting: "Hello" },
+        { brand: "Excel", greeting: "Bonjour" },
+      );
+
+      const result = await adoptExistingTranslations({
+        catalogs: [catalog],
+        sourceLocale: "en",
+        targetLocales: ["fr"],
+      });
+
+      expect(result.adopted).toBe(2);
+      expect(result.identicalToSource).toBe(1);
+      expect(result.state.entries["fr::namespace-json::common::/brand"]).toBeDefined();
+    });
+
+    it("counts but omits identical targets when asked to skip them", async () => {
+      const catalog = await seedCatalog(
+        { brand: "Excel", greeting: "Hello" },
+        { brand: "Excel", greeting: "Bonjour" },
+      );
+
+      const result = await adoptExistingTranslations({
+        catalogs: [catalog],
+        identicalToSource: "skip",
+        sourceLocale: "en",
+        targetLocales: ["fr"],
+      });
+
+      expect(result.adopted).toBe(1);
+      expect(result.identicalToSource).toBe(1);
+      expect(result.state.entries["fr::namespace-json::common::/brand"]).toBeUndefined();
+    });
+
+    it("ignores non-string source values", async () => {
+      const catalog = await seedCatalog(
+        { count: 3, enabled: true, greeting: "Hello" },
+        { count: 3, enabled: true, greeting: "Bonjour" },
+      );
+
+      const result = await adoptExistingTranslations({
+        catalogs: [catalog],
+        sourceLocale: "en",
+        targetLocales: ["fr"],
+      });
+
+      expect(result.adopted).toBe(1);
+      expect(Object.keys(result.state.entries)).toEqual([
+        "fr::namespace-json::common::/greeting",
+      ]);
+    });
+
+    it("treats a locale with no document at all as fully untranslated", async () => {
+      const catalog = await seedCatalog({ greeting: "Hello" }, { greeting: "Bonjour" });
+
+      const result = await adoptExistingTranslations({
+        catalogs: [catalog],
+        sourceLocale: "en",
+        targetLocales: ["fr", "de"],
+      });
+
+      expect(result.adopted).toBe(1);
+      expect(result.untranslated).toBe(1);
+    });
   });
 
   it("rejects invalid persisted state files", async () => {

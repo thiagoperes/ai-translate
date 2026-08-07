@@ -134,9 +134,20 @@ ai-translate new-locale pt --from es --strategy copy-locale-and-retranslate
 
 Creates the files for a locale without translating anything. Defaults to `--strategy copy-locale`.
 
-### `migrate-state --from startup-v1`
+### `adopt`
 
-One-time import of a legacy `{ hashes, overrides }` lock file into translation state. Reads `script/translation-lock.json` unless you pass `--legacy-file`.
+One-time migration from whatever tool translated your catalogs before this one. It reads the catalogs themselves and records every existing translation as state, so the first `sync` afterwards only translates what is genuinely missing instead of redoing the whole corpus.
+
+Because catalogs carry no evidence of who wrote their text, every adopted entry is recorded with an origin of `legacy-unknown`. What happens to those entries later is up to `legacyOriginPolicy` in your config: `preserve` (the default) leaves them alone, `validate-existing` runs the deterministic validators over them without calling a model, and `retranslate` regenerates them under the current contract.
+
+A source string with no target text, or an empty one, is left out of state entirely so the next sync still picks it up.
+
+Target text byte-identical to the source is ambiguous — it is either a correct translation that happens to match (`Excel`, or `Status` in German) or a placeholder from a pipeline that backfilled missing keys with English. `--identical-to-source adopt` is the default and keeps it; `skip` leaves those entries to the next sync. The command reports the count either way, so start with `--dry-run` and decide from the number.
+
+```bash
+ai-translate adopt --dry-run
+ai-translate adopt
+```
 
 ## Flags
 
@@ -147,7 +158,7 @@ One-time import of a legacy `{ hashes, overrides }` lock file into translation s
 | `--catalog <id>` | sync, check, audit, validate | Limit to a catalog. Repeatable. |
 | `--unit <id>` | sync, check, audit, validate | Limit to a document unit. Repeatable. |
 | `--include-path <pointer>` | sync, check, audit, validate | Limit to exact JSON pointers; everything else is left untouched. Repeatable. |
-| `--dry-run` | sync, new-locale | Plan the work and report it without writing. |
+| `--dry-run` | sync, new-locale, adopt | Plan the work and report it without writing. |
 | `--force-retranslate` | sync | Retranslate the selected scope even when state is current. |
 | `--force-retranslate-path <pointer>` | sync | Force retranslation of specific pointers. Repeatable. |
 | `--max-pending-translations <n>` | sync, check | Abort before any provider call if the scope would translate more than `n` entries. |
@@ -155,7 +166,7 @@ One-time import of a legacy `{ hashes, overrides }` lock file into translation s
 | `--refresh` | audit | Re-run audits even where provenance already exists. |
 | `--from <locale>` | new-locale, scaffold-locale | Locale to seed from. |
 | `--strategy <strategy>` | new-locale, scaffold-locale | Scaffolding strategy. |
-| `--legacy-file <path>` | migrate-state | Path to the legacy lock file. |
+| `--identical-to-source <adopt\|skip>` | adopt | What to do with target text identical to its source. Defaults to `adopt`. |
 | `--help`, `-h` | | Print usage. |
 | `--version`, `-v` | | Print the version. |
 

@@ -1,5 +1,3 @@
-import * as path from "node:path";
-
 import {
   auditCatalogs,
   syncCatalogs,
@@ -15,7 +13,8 @@ import type {
   SyncStateSnapshot,
   ValidationResult,
 } from "@ai-translate/core/types";
-import { importStartupV1State } from "@ai-translate/fs-json";
+import { adoptExistingTranslations } from "@ai-translate/fs-json";
+import type { IdenticalToSourcePolicy } from "@ai-translate/fs-json";
 import type { ProviderChoice } from "@ai-translate/next";
 
 import { loadConfig, loadEnvFiles } from "./config";
@@ -35,7 +34,7 @@ interface CommandOptions {
   forceRetranslatePaths?: string[];
   includePaths?: string[];
   from?: string;
-  legacyFile?: string;
+  identicalToSource?: IdenticalToSourcePolicy;
   locales?: string[];
   integration?: string;
   maxPendingTranslations?: number;
@@ -65,6 +64,16 @@ function requireOptionValue(optionName: string, value: string | undefined): stri
 function requireProviderChoice(value: string): ProviderChoice {
   if (value !== "ai-sdk" && value !== "openai") {
     throw new Error(`Option "--provider" accepts "openai" or "ai-sdk", not "${value}".`);
+  }
+
+  return value;
+}
+
+function requireIdenticalToSourcePolicy(value: string): IdenticalToSourcePolicy {
+  if (value !== "adopt" && value !== "skip") {
+    throw new Error(
+      `Option "--identical-to-source" accepts "adopt" or "skip", not "${value}".`,
+    );
   }
 
   return value;
@@ -380,12 +389,6 @@ async function scaffoldLocale(
   );
 }
 
-function resolveLegacyFilePath(cwd: string, explicitPath?: string): string {
-  return explicitPath
-    ? path.resolve(cwd, explicitPath)
-    : path.resolve(cwd, "script/translation-lock.json");
-}
-
 function printHelp(): void {
   console.log(`ai-translate
 
@@ -397,7 +400,7 @@ Usage:
   ai-translate sync [--config <path>] [--dry-run] [--force-retranslate] [--force-retranslate-path <json-pointer>] [--include-path <json-pointer>] [--locale <locale>] [--catalog <id>] [--unit <id>] [--max-pending-translations <count>]
   ai-translate new-locale <locale> [--from <locale>] [--strategy <strategy>] [--config <path>]
   ai-translate scaffold-locale <locale> --from <locale> [--strategy <strategy>] [--config <path>]
-  ai-translate migrate-state --from startup-v1 [--legacy-file <path>] [--config <path>]
+  ai-translate adopt [--identical-to-source <adopt|skip>] [--dry-run] [--config <path>]
   ai-translate --help
   ai-translate --version`);
 }
@@ -518,8 +521,10 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
             index += 1;
           }
           break;
-        case "legacy-file":
-          options.legacyFile = requireOptionValue(flag, nextValue);
+        case "identical-to-source":
+          options.identicalToSource = requireIdenticalToSourcePolicy(
+            requireOptionValue(flag, nextValue),
+          );
           if (inlineValue === undefined) {
             index += 1;
           }
@@ -840,25 +845,28 @@ export async function runCli(
         );
         return 0;
       }
-      case "migrate-state": {
-        if (parsed.options.from !== "startup-v1") {
-          throw new Error('The "migrate-state" command currently only supports --from startup-v1.');
-        }
-
+      case "adopt": {
         await loadEnvFiles(cwd);
         const { config } = await loadConfig(cwd, parsed.options.config);
-        const importedState = await importStartupV1State({
+        const result = await adoptExistingTranslations({
           catalogs: config.catalogs,
-          legacyFilePath: resolveLegacyFilePath(cwd, parsed.options.legacyFile),
+          identicalToSource: parsed.options.identicalToSource ?? "adopt",
           sourceLocale: config.sourceLocale,
           targetLocales: config.targetLocales,
         });
-        await config.state.save(importedState);
+
+        if (!parsed.options.dryRun) {
+          await config.state.save(result.state);
+        }
+
         console.log(
           JSON.stringify(
             {
-              entries: Object.keys(importedState.entries).length,
+              adopted: result.adopted,
+              dryRun: parsed.options.dryRun === true,
+              identicalToSource: result.identicalToSource,
               status: "ok",
+              untranslated: result.untranslated,
             },
             null,
             2,

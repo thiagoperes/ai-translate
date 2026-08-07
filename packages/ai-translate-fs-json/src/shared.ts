@@ -14,7 +14,6 @@ import type { PluralKeyStrategy } from "@ai-translate/core/plural";
 import { rebaseIndexedEntries } from "@ai-translate/core/reconcile";
 import { tokenizeText } from "@ai-translate/core/tokens";
 import type {
-  AddressSegment,
   DocumentFormat,
   DocumentRef,
   Entry,
@@ -262,20 +261,3 @@ export function createDocumentRef(args: {
   };
 }
 
-export function addressToLegacyKey(address: readonly AddressSegment[]): string {
-  let result = "";
-  for (const segment of address) {
-    if (segment.kind === "node") {
-      continue;
-    }
-
-    if (segment.kind === "index") {
-      result += `[${String(segment.index)}]`;
-      continue;
-    }
-
-    result = result.length === 0 ? segment.key : `${result}.${segment.key}`;
-  }
-
-  return result;
-}
