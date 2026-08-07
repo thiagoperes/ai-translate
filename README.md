@@ -18,6 +18,7 @@ Key features:
 | 🧩 **Flexible** | Supports JSON, Markdoc, HTML, ICU, i18next, and Next.js. |
 | ✍️ **Human-friendly** | Preserve manual edits with atomic writes. |
 | 📈 **Scalable** | Use sharded state, scoped runs, and pluggable providers. |
+| 💸 **Cheap** | Around [$1 per million source words, per locale](#what-it-costs). |
 
 ```bash
 npx ai-translate sync --dry-run   # what would be translated, and why
@@ -56,6 +57,27 @@ Validation blocks on the things that break your app — a placeholder the code s
 It deliberately stays out of the way everywhere else. Word order is the translator's business, not the validator's: German fronting `{{count}}` ahead of `{{language}}` is correct output, and a tool that rejects it discards a good translation and leaves the string in English forever. Cosmetic differences like dropped emphasis are reported as warnings and ship.
 
 Semantic preservation rides along with the translation request by default, so it costs no extra model calls. Set `validation.semanticAuditExecution: "provider"` when you want a second model to re-read the output independently.
+
+## What it costs
+
+Cost scales with translatable segments, not with files or repositories. A full first pass over a large blog — 5,000 posts of 1,500 words into 10 target locales — is 7.5M source words, about 1.06M segments, and roughly 267M input plus 140M output tokens:
+
+| Model | Input $/M | Output $/M | Full first pass | Per 1M words, per locale |
+| --- | --- | --- | --- | --- |
+| DeepSeek V4 Flash | $0.14 | $0.28 | $77 | $1.02 |
+| Gemini 2.5 Flash-Lite | $0.10 | $0.40 | $83 | $1.10 |
+| GPT-5.6 Luna | $0.20 | $1.20 | $221 | $2.95 |
+
+About a dollar per million source words per locale on the cheap tiers. That is the one-off cost of catching up; every run after it pays only for what changed, so steady-state spend tracks your edit rate rather than your corpus size.
+
+Two things move the total more than the rate card does:
+
+- **Reasoning tokens**, which bill at the output rate. Defaults differ sharply: DeepSeek V4 Flash thinks by default, GPT-5.6 Luna inherits the API's default effort, and Gemini 2.5 Flash-Lite ships with thinking off. The table assumes reasoning is disabled; leaving the defaults alone costs $116 and $389 for the two that think.
+- **Figures in the source.** A paragraph containing a number is translated through a protected-assembly schema that pins every digit and enumerates the target locale's number forms, costing around 132 tokens per entry against 36 for plain prose. The table assumes a quarter of paragraphs carry one.
+
+Prompt caching is not a meaningful lever here. The only prefix shared across calls is the system prompt, which is roughly a tenth of input tokens once amortised across a batch, and input is the cheaper half of the bill.
+
+Token counts are measured by capturing the payloads the provider actually sends at stock defaults, the same method as [`bench/prompt.bench.mjs`](bench/prompt.bench.mjs), rather than estimated from the prompt source. Prices are the published rate cards as of 2026-08-07 and will drift; re-check them before quoting a budget.
 
 ## Install
 
