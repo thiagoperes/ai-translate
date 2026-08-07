@@ -3893,6 +3893,75 @@ describe("translation guardrails", () => {
     expect([...candidates.values()]).toEqual(["fr:Title"]);
   });
 
+  it("reads an attested-era cache once the attested gate closes", async () => {
+    // Whether candidates are stored attested or plain follows the configuration,
+    // not the entry, and the two live in separate storage that does not fall back
+    // to the other. A project running generator-self-check with no configured
+    // audits therefore wrote its entire corpus through putAttested; narrowing the
+    // attested path to configurations that actually have audits is correct going
+    // forward, but leaves that corpus unreachable. Nothing else here would notice
+    // — the run still succeeds, it just silently pays the provider again for
+    // every entry it already has.
+    const catalog = createMemoryCatalog();
+    seedSource(catalog, [stringEntry("title", "Title")]);
+    let providerCalls = 0;
+    const result = await syncCatalogs({
+      candidateCache: {
+        identity: {
+          modelId: "model-v1",
+          providerId: "provider",
+          providerRevision: "provider-v1",
+        },
+        store: {
+          get() {
+            return Promise.resolve(undefined);
+          },
+          getAttested() {
+            return Promise.resolve({
+              selfCheck: {
+                modelId: "model-v1",
+                planDigests: [],
+                verified: true as const,
+              },
+              translation: "fr:Title",
+            });
+          },
+          promote() {
+            return Promise.resolve();
+          },
+          put() {
+            return Promise.resolve();
+          },
+          reject() {
+            return Promise.resolve();
+          },
+        },
+      },
+      catalogs: [catalog],
+      generationRevision: "generation-v1",
+      provider: {
+        translate: ({ requests }) => {
+          providerCalls += 1;
+          return Promise.resolve(
+            requests.map((request) => ({
+              key: request.key,
+              translation: `fr:${request.sourceText}`,
+            }))
+          );
+        },
+      },
+      sourceLocale: "en",
+      state: createStateStore(),
+      targetLocales: ["fr"],
+    });
+
+    expect(providerCalls).toBe(0);
+    expect(result.metrics.candidateCacheHits).toBe(1);
+    expect(catalog.documents.get("fr:common")?.entries[0]?.value).toBe(
+      "fr:Title"
+    );
+  });
+
   it("caches completed in-flight locale groups before surfacing a provider failure", async () => {
     const catalog = createMemoryCatalog();
     seedSource(catalog, [

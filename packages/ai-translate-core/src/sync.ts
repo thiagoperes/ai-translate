@@ -551,6 +551,20 @@ async function readCachedCandidate(
       metrics.candidateCacheHits += 1;
       return { translation };
     }
+    /*
+     * An attested record is a plain record plus provenance, so its text is
+     * always usable here even though the attestation is not needed. Probing for
+     * one matters because the attested/plain choice is a property of the
+     * configuration rather than of the entry: a project that once ran
+     * generator-self-check without any configured audits wrote its whole corpus
+     * through the attested path, and reading only the plain path would abandon
+     * that cache and re-send every entry to the provider.
+     */
+    const attested = await config.candidateCache.store.getAttested?.(key);
+    if (attested !== undefined) {
+      metrics.candidateCacheHits += 1;
+      return { translation: attested.translation };
+    }
     metrics.candidateCacheMisses += 1;
     return undefined;
   } catch {
