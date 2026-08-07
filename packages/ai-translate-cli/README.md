@@ -138,7 +138,15 @@ Creates the files for a locale without translating anything. Defaults to `--stra
 
 One-time migration from whatever tool translated your catalogs before this one. It reads the catalogs themselves and records every existing translation as state, so the first `sync` afterwards only translates what is genuinely missing instead of redoing the whole corpus.
 
-Because catalogs carry no evidence of who wrote their text, every adopted entry is recorded with an origin of `legacy-unknown`. What happens to those entries later is up to `legacyOriginPolicy` in your config: `preserve` (the default) leaves them alone, `validate-existing` runs the deterministic validators over them without calling a model, and `retranslate` regenerates them under the current contract.
+Because catalogs carry no evidence of who wrote their text, every adopted entry is recorded with an origin of `legacy-unknown`. What happens to those entries later is up to `legacyOriginPolicy` in your config, and the choice matters more than it looks:
+
+| Policy | First sync after adopting | Once English changes |
+| --- | --- | --- |
+| `preserve` (default) | Nothing. | The entry is reported as stale rather than retranslated, so `check` fails and a human decides. |
+| `validate-existing` | Runs the deterministic validators over the existing text, no model calls, and promotes surviving entries to `generated`. | Retranslated automatically, like any other entry. |
+| `retranslate` | Regenerates every adopted entry under the current contract. | Retranslated automatically. |
+
+`validate-existing` is the one you want for a migration. It costs no model calls, it checks the inherited text instead of trusting it, and it graduates the corpus into normal behaviour in a single pass — otherwise every adopted entry keeps acting like a hand-written override and your next copy edit turns into a CI failure instead of a translation. Expect that first pass to surface a punch list of pre-existing problems; that is the validators doing their job.
 
 A source string with no target text, or an empty one, is left out of state entirely so the next sync still picks it up.
 
