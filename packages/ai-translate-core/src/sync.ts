@@ -49,7 +49,10 @@ import {
   getStateHistory,
   removeStateEntriesInPlace,
 } from "./state-operations";
-import { LEGACY_UNVERIFIED_GENERATION_REVISION } from "./types";
+import {
+  LEGACY_UNVERIFIED_GENERATION_REVISION,
+  supportsScopedSave,
+} from "./types";
 import type {
   AiTranslateConfig,
   CatalogAdapter,
@@ -4213,10 +4216,22 @@ export async function syncCatalogs(
   const catalogs = resolveCatalogs(config, options);
   const startedAt = performance.now();
 
+  /*
+   * A sync only ever reads state through a target locale: history is indexed by
+   * locale, and every other lookup goes through a state key that embeds one. So
+   * the rest of the corpus is loaded only to be written back untouched, which on
+   * a large project is most of it. Stores that can merge a scoped save let it
+   * stay on disk; the others keep the whole-corpus contract, where omitting an
+   * entry means deleting it.
+   */
+  const saveScope = supportsScopedSave(config.state)
+    ? { locales: targetLocales }
+    : undefined;
+
   const runSync = async (): Promise<SyncResult> => {
     const metrics = createEmptyMetrics();
     const stateLoadStartedAt = performance.now();
-    let state = await config.state.load();
+    let state = await config.state.load(saveScope);
     metrics.phases.stateLoadMs += performance.now() - stateLoadStartedAt;
     if (state.version !== 1 && state.version !== 2) {
       throw new Error(
@@ -4462,7 +4477,7 @@ export async function syncCatalogs(
 
     if (!dryRun) {
       const stateWriteStartedAt = performance.now();
-      await config.state.save(state);
+      await config.state.save(state, saveScope);
       metrics.phases.stateWriteMs += performance.now() - stateWriteStartedAt;
     }
 

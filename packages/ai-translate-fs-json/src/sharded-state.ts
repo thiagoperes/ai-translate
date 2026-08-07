@@ -4,6 +4,7 @@ import * as path from "node:path";
 
 import { makeLegacyStateKey, makeStateKey } from "@ai-translate/core/address";
 import { hasCompleteAcceptedSemanticAuditProvenance } from "@ai-translate/core/acceptance";
+import { SCOPED_SAVE_STATE_STORE } from "@ai-translate/core/types";
 import type {
   SemanticAuditConsensusEvaluation,
   SemanticAuditEvaluation,
@@ -1102,11 +1103,112 @@ async function writeCompactJsonFileAtomic(filePath: string, value: unknown): Pro
   }
 }
 
-async function writeShardFiles(shardsDir: string, snapshot: SyncStateSnapshot): Promise<void> {
+function scopeLocaleSet(scope: SyncStateLoadScope | undefined): ReadonlySet<string> | undefined {
+  const locales = scope?.locales;
+  // An empty locale list is "no narrowing", matching the load path. Treating it
+  // as "nothing is in scope" would turn a save into a corpus-wide deletion.
+  return locales === undefined || locales.length === 0 ? undefined : new Set(locales);
+}
+
+function shardIdentity(shard: ShardFile): { catalogId: string | undefined; unitId: string } {
+  return isShardFileV2(shard)
+    ? { catalogId: shard.c ?? undefined, unitId: shard.u }
+    : { catalogId: shard.catalogId ?? undefined, unitId: shard.unitId };
+}
+
+/**
+ * Folds a shard's out-of-scope records back in, so a scoped write preserves the
+ * locales it was never authoritative for.
+ *
+ * Shards are keyed by unit, not by locale, so one file holds every locale of a
+ * unit. Repacking it from a snapshot that only carries some of them would drop
+ * the rest even though the file itself was rewritten rather than deleted.
+ *
+ * Returns `null` when nothing survives, which is the only case where a scoped
+ * save may delete a shard.
+ */
+async function mergeShardWithinScope(
+  absolutePath: string,
+  group: ShardGroup | undefined,
+  scopedLocales: ReadonlySet<string>,
+): Promise<ShardGroup | null> {
+  const shard = await readShard(absolutePath);
+  if (shard === null) {
+    return group ?? null;
+  }
+
+  const identity = shardIdentity(shard);
+  const merged: ShardGroup = {
+    catalogId: group?.catalogId ?? identity.catalogId,
+    entries: {},
+    unitId: group?.unitId ?? identity.unitId,
+  };
+
+  // One shard at a time, and discarded once written: the point of a scoped save
+  // is that peak memory tracks the largest unit rather than the whole corpus.
+  const existing = loadEntriesFromShard(shard, absolutePath, createShardLoadContext(undefined));
+  for (const entry of Object.values(existing)) {
+    if (scopedLocales.has(entry.locale)) {
+      continue;
+    }
+    (merged.entries[entry.jsonPointer] ??= {})[entry.locale] = buildShardRecordFromEntry(entry);
+  }
+
+  for (const [pointer, byLocale] of Object.entries(group?.entries ?? {})) {
+    const bucket = (merged.entries[pointer] ??= {});
+    for (const [locale, record] of Object.entries(byLocale)) {
+      bucket[locale] = record;
+    }
+  }
+
+  return Object.keys(merged.entries).length === 0 ? null : merged;
+}
+
+function assertSnapshotWithinScope(
+  snapshot: SyncStateSnapshot,
+  scopedLocales: ReadonlySet<string>,
+): void {
+  for (const entry of Object.values(snapshot.entries)) {
+    if (!scopedLocales.has(entry.locale)) {
+      throw new Error(
+        `Scoped ai-translate save received an entry for locale "${entry.locale}", which is outside the declared scope. ` +
+          `Saving it would be silently dropped for every unit the snapshot does not mention.`,
+      );
+    }
+  }
+}
+
+async function writeShardFiles(
+  shardsDir: string,
+  snapshot: SyncStateSnapshot,
+  scope?: SyncStateLoadScope,
+): Promise<void> {
   const groups = groupEntriesByShard(snapshot);
   const existingShards = new Set(await listShardFiles(shardsDir));
 
   await fs.mkdir(shardsDir, { recursive: true });
+
+  const scopedLocales = scopeLocaleSet(scope);
+  if (scopedLocales !== undefined) {
+    assertSnapshotWithinScope(snapshot, scopedLocales);
+    // Every existing shard has to be visited even when the snapshot says
+    // nothing about it: the snapshot is authoritative for its locales, so
+    // silence means those records are gone, while the others must survive.
+    await waitForStateMutations(
+      [...new Set([...groups.keys(), ...existingShards])].map(async (shardPath) => {
+        const absolute = path.join(shardsDir, shardPath);
+        const merged = existingShards.has(shardPath)
+          ? await mergeShardWithinScope(absolute, groups.get(shardPath), scopedLocales)
+          : (groups.get(shardPath) ?? null);
+        await (merged === null
+          ? fs.rm(absolute, { force: true })
+          : writeCompactJsonFileAtomic(absolute, packShard(merged)));
+      }),
+      "Failed to write ai-translate state shards.",
+    );
+    await syncDirectoryTree(shardsDir);
+    return;
+  }
 
   // Do not let the durable coordinator begin rollback while a sibling shard
   // mutation is still running. A fail-fast Promise.all can otherwise allow a
@@ -1324,6 +1426,7 @@ export function createShardedJsonStateStore(
 
   return {
     [DURABLE_TRANSACTION_STATE_STORE]: durableTransaction,
+    [SCOPED_SAVE_STATE_STORE]: true,
     async load(scope) {
       const migrated = await migrateLegacyMonolithicState({ legacyPath, shardsDir });
       if (migrated !== null) {
@@ -1334,8 +1437,8 @@ export function createShardedJsonStateStore(
 
       return await loadFromShards(shardsDir, scope);
     },
-    async save(state) {
-      await writeShardFiles(shardsDir, state);
+    async save(state, scope) {
+      await writeShardFiles(shardsDir, state, scope);
     },
     async withLock(operation) {
       await fs.mkdir(path.dirname(lockPath), { recursive: true });

@@ -503,15 +503,49 @@ export interface SyncStateLoadScope {
   locales?: readonly string[];
 }
 
+/**
+ * Marks a store whose {@link SyncStateStore.save} honours a scope by merging
+ * rather than replacing.
+ *
+ * Saving is otherwise a whole-corpus operation: anything absent from the
+ * snapshot is deleted, which is what makes a scoped snapshot unsafe to write
+ * back. A store that carries this marker promises the opposite reading of the
+ * same snapshot — authoritative inside the scope, silent outside it — so a
+ * caller may narrow the load and still save. The marker exists because that
+ * promise cannot be expressed in the type system, and getting it wrong on a
+ * store that merely ignores the argument would delete every excluded locale.
+ *
+ * `Symbol.for` keeps the marker recognisable across duplicate copies of this
+ * package in a dependency tree.
+ */
+export const SCOPED_SAVE_STATE_STORE: unique symbol = Symbol.for(
+  "@ai-translate/core/scoped-save-state-store"
+);
+
 export interface SyncStateStore {
+  /** Present only on stores that can merge a scoped {@link save}. */
+  readonly [SCOPED_SAVE_STATE_STORE]?: true;
   /**
-   * A scoped snapshot is only safe to read. Passing one to {@link save} would
-   * delete every entry the scope excluded, so scoped loads must never feed a
-   * save.
+   * A scoped snapshot is only safe to save back through a store that declares
+   * {@link SCOPED_SAVE_STATE_STORE}, and only under the same scope it was
+   * loaded with. Anywhere else it is read-only.
    */
   load(scope?: SyncStateLoadScope): Promise<SyncStateSnapshot>;
-  save(state: SyncStateSnapshot): Promise<void>;
+  /**
+   * Replaces the whole corpus, deleting anything the snapshot omits.
+   *
+   * When `scope` is passed, the snapshot is instead authoritative only for the
+   * locales it names: entries outside them are left as they are rather than
+   * treated as deletions. Only stores declaring
+   * {@link SCOPED_SAVE_STATE_STORE} interpret the argument.
+   */
+  save(state: SyncStateSnapshot, scope?: SyncStateLoadScope): Promise<void>;
   withLock<T>(operation: () => Promise<T>): Promise<T>;
+}
+
+/** Narrowing helper; see {@link SCOPED_SAVE_STATE_STORE}. */
+export function supportsScopedSave(store: SyncStateStore): boolean {
+  return store[SCOPED_SAVE_STATE_STORE] === true;
 }
 
 export interface PathPolicyRule {
