@@ -816,8 +816,11 @@ export interface AiTranslateConfig {
     /** Number of provider-backed semantic repair cycles after the first audit. */
     semanticRepairAttempts?: number;
     /**
-     * `generator-self-check` moves semantic preservation into the translation
-     * response itself. No semantic provider is called after translation.
+     * `generator-self-check` (the default) moves semantic preservation into the
+     * translation response itself, so no semantic provider is called after
+     * translation. `provider` replays every audited string through a separate
+     * model — one or two extra calls per batch — and is worth it only when you
+     * want a second opinion from a model that did not write the translation.
      */
     semanticAuditExecution?: "generator-self-check" | "provider";
     /**

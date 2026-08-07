@@ -289,6 +289,7 @@ describe("runCli", { concurrent: false }, () => {
           audit: () => Promise.reject(new Error("semantic audit unavailable")),
         }),
       ],
+      validation: { semanticAuditExecution: "provider" as const },
     });
     const { stderrSpy } = mockConsole();
     vi.spyOn(configModule, "loadEnvFiles").mockResolvedValue({});
@@ -350,6 +351,7 @@ describe("runCli", { concurrent: false }, () => {
     const { cwd } = await createWorkspace({ claim: "No refundable deposit" });
     const config = createConfig(cwd, undefined, {
       semanticAudits: [semanticAudit(semanticProvider("ambiguous"))],
+      validation: { semanticAuditExecution: "provider" as const },
     });
     const { stderrSpy } = mockConsole();
     vi.spyOn(configModule, "loadEnvFiles").mockResolvedValue({});
@@ -370,6 +372,7 @@ describe("runCli", { concurrent: false }, () => {
     const { cwd } = await createWorkspace({ claim: "No refundable deposit" });
     const config = createConfig(cwd, undefined, {
       semanticAudits: [semanticAudit(semanticProvider("preserved"))],
+      validation: { semanticAuditExecution: "provider" as const },
     });
     const { stderrSpy } = mockConsole();
     vi.spyOn(configModule, "loadEnvFiles").mockResolvedValue({});
@@ -407,7 +410,7 @@ describe("runCli", { concurrent: false }, () => {
       },
       {
         semanticAudits: [semanticAudit(semanticProvider("contradicted"))],
-        validation: { semanticRepairAttempts: 3 },
+        validation: { semanticAuditExecution: "provider" as const, semanticRepairAttempts: 3 },
       },
     );
     const { stderrSpy } = mockConsole();

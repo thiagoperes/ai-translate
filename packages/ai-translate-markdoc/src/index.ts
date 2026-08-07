@@ -846,10 +846,12 @@ export function createMarkdocCatalog(options: MarkdocCatalogOptions): CatalogAda
         // authoritative structure contract for the translated value.
         const structuralSourceValue =
           entry.tokens?.map((token) => token.raw).join("") ?? sourceValue;
+        // Parity reports Markdown differences as warnings because in a UI
+        // string a lost emphasis is cosmetic. Here the value is spliced back
+        // into a Markdoc AST, so the same difference changes how the file
+        // parses — every issue is structural regardless of its severity.
         const structuralIssues = changedFromInitialValue
-          ? validateTokenParity(structuralSourceValue, entry.value).filter(
-              (issue) => issue.severity === "error",
-            )
+          ? validateTokenParity(structuralSourceValue, entry.value)
           : [];
         if (structuralIssues.length > 0) {
           throw new Error(

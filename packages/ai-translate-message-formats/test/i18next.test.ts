@@ -12,7 +12,7 @@ function codes(sourceText: string, targetText: string): string[] {
 describe("i18nextMessageFormat", () => {
   it("keeps the plain double-brace interpolation contract", () => {
     expect(codes("Page {{page}} of {{total}}", "Seite {{page}} von {{total}}")).toEqual([]);
-    expect(codes("Page {{page}}", "Seite")).toEqual(["token-count-mismatch"]);
+    expect(codes("Page {{page}}", "Seite")).toEqual(["token-missing"]);
   });
 
   it("rejects a translated nesting key", () => {

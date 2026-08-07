@@ -1,3 +1,4 @@
+import type * as AiTranslateCore from "@ai-translate/core";
 import type { AiTranslateConfig, SyncResult } from "@ai-translate/core/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -22,7 +23,10 @@ const mockAdoptExistingTranslations = vi.hoisted(() => vi.fn());
 const mockLoadConfig = vi.hoisted(() => vi.fn());
 const mockLoadEnvFiles = vi.hoisted(() => vi.fn());
 
-vi.mock("@ai-translate/core", () => ({
+// Spread the real module so pure helpers keep their real behaviour and adding
+// an export to core cannot silently hand the CLI an undefined function here.
+vi.mock("@ai-translate/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof AiTranslateCore>()),
   auditCatalogs: mockAuditCatalogs,
   defineConfig: mockDefineConfig,
   syncCatalogs: mockSyncCatalogs,
@@ -389,7 +393,7 @@ describe("runCli branch coverage", () => {
     const { stderrSpy, stdoutSpy } = spyOnConsole();
     const config = createConfig({
       semanticAudits: [{} as never],
-      validation: { semanticRepairAttempts: 1 },
+      validation: { semanticAuditExecution: "provider", semanticRepairAttempts: 1 },
     });
     mockLoadEnvFiles.mockResolvedValue({});
     mockLoadConfig.mockResolvedValue({
@@ -461,7 +465,7 @@ describe("runCli branch coverage", () => {
 
   it("uses one semantic pass by default and never starts a repair loop", async () => {
     const { stderrSpy } = spyOnConsole();
-    const config = createConfig({ semanticAudits: [{} as never] });
+    const config = createConfig({ semanticAudits: [{} as never], validation: { semanticAuditExecution: "provider" } });
     mockLoadEnvFiles.mockResolvedValue({});
     mockLoadConfig.mockResolvedValue({
       config,
@@ -488,7 +492,7 @@ describe("runCli branch coverage", () => {
 
   it("fails a converged sync on unresolved semantic audits", async () => {
     const { stderrSpy } = spyOnConsole();
-    const config = { ...createConfig(), semanticAudits: [{} as never] };
+    const config = { ...createConfig(), semanticAudits: [{} as never], validation: { semanticAuditExecution: "provider" as const } };
     mockLoadEnvFiles.mockResolvedValue({});
     mockLoadConfig.mockResolvedValue({
       config,
@@ -528,7 +532,7 @@ describe("runCli branch coverage", () => {
 
   it("points audit-only check failures to an audit refresh", async () => {
     const { stderrSpy } = spyOnConsole();
-    const config = createConfig({ semanticAudits: [{} as never] });
+    const config = createConfig({ semanticAudits: [{} as never], validation: { semanticAuditExecution: "provider" } });
     mockLoadEnvFiles.mockResolvedValue({});
     mockLoadConfig.mockResolvedValue({
       config,
@@ -720,7 +724,7 @@ describe("runCli branch coverage", () => {
       semanticAudits: [{} as never],
       sourceLocale: "en",
       targetLocales: ["fr"],
-      validation: { semanticRepairAttempts: 1 },
+      validation: { semanticAuditExecution: "provider", semanticRepairAttempts: 1 },
     });
     mockLoadEnvFiles.mockResolvedValue({});
     mockLoadConfig.mockResolvedValue({
@@ -795,7 +799,7 @@ describe("runCli branch coverage", () => {
     const { stderrSpy, stdoutSpy } = spyOnConsole();
     const config = createConfig({
       semanticAudits: [{} as never],
-      validation: { semanticRepairAttempts: 3 },
+      validation: { semanticAuditExecution: "provider", semanticRepairAttempts: 3 },
     });
     mockLoadEnvFiles.mockResolvedValue({});
     mockLoadConfig.mockResolvedValue({

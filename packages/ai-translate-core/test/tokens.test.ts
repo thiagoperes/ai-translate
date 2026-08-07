@@ -199,37 +199,49 @@ describe("tokenization", () => {
     expect(validateTokenParity("Hello {name}", "Bonjour {name}")).toEqual([]);
   });
 
-  it("reports token count mismatches", () => {
+  it("rejects a dropped placeholder as a data-losing error", () => {
     expect(validateTokenParity("Hello {name}", "Bonjour")).toEqual([
       {
-        code: "token-count-mismatch",
-        message: "Expected 1 non-text token(s) but received 0.",
+        code: "token-missing",
+        message: 'Source token "{name}" is absent from the translation.',
         severity: "error",
       },
     ]);
   });
 
-  it("reports mismatched token order", () => {
+  it("rejects a placeholder the source never contained", () => {
+    expect(validateTokenParity("Hello {name}", "Bonjour {nom}")).toEqual([
+      {
+        code: "token-missing",
+        message: 'Source token "{name}" is absent from the translation.',
+        severity: "error",
+      },
+      {
+        code: "token-unexpected",
+        message: 'Translation adds token "{nom}", which the source does not contain.',
+        severity: "error",
+      },
+    ]);
+  });
+
+  it("allows target grammar to reorder placeholders and tags", () => {
     expect(
       validateTokenParity(
         "Save <highlight>{{amount}}</highlight> now",
         "Sparen Sie {{amount}} <highlight>jetzt</highlight>",
       ),
-    ).toEqual([
-      {
-        code: "token-order-mismatch",
-        message: 'Token "<highlight>" does not match "{{amount}}" at position 1.',
-        severity: "error",
-      },
-      {
-        code: "token-order-mismatch",
-        message: 'Token "{{amount}}" does not match "<highlight>" at position 2.',
-        severity: "error",
-      },
-    ]);
+    ).toEqual([]);
+
+    // The real German case that a positional check used to reject outright.
+    expect(
+      validateTokenParity(
+        "Language set to {{language}} for {{count}} number.",
+        "Sprache für {{count}} Nummer auf {{language}} gesetzt.",
+      ),
+    ).toEqual([]);
   });
 
-  it("rejects changed Markdown destinations", () => {
+  it("warns rather than fails when a Markdown destination is localized", () => {
     expect(
       validateTokenParity(
         "Read [the guide](/blog/fleet-guide)",
@@ -237,15 +249,20 @@ describe("tokenization", () => {
       ),
     ).toEqual([
       {
-        code: "token-order-mismatch",
+        code: "token-missing",
+        message: 'Source token "](/blog/fleet-guide)" is absent from the translation.',
+        severity: "warning",
+      },
+      {
+        code: "token-unexpected",
         message:
-          'Token "](/blog/fleet-guide)" does not match "](/blog/anderer-leitfaden)" at position 2.',
-        severity: "error",
+          'Translation adds token "](/blog/anderer-leitfaden)", which the source does not contain.',
+        severity: "warning",
       },
     ]);
   });
 
-  it("rejects removed link openers and links changed into images", () => {
+  it("warns on removed link openers and links changed into images", () => {
     expect(
       validateTokenParity(
         "Read [the guide](/guide) and ![the chart](/chart.webp).",
@@ -253,9 +270,9 @@ describe("tokenization", () => {
       ),
     ).toEqual([
       {
-        code: "token-count-mismatch",
-        message: "Expected 4 non-text token(s) but received 3.",
-        severity: "error",
+        code: "token-missing",
+        message: 'Source token "![" is absent from the translation.',
+        severity: "warning",
       },
     ]);
 
@@ -263,14 +280,19 @@ describe("tokenization", () => {
       validateTokenParity("See [the chart](/chart.webp).", "Voir ![le graphique](/chart.webp)."),
     ).toEqual([
       {
-        code: "token-order-mismatch",
-        message: 'Token "[" does not match "![" at position 1.',
-        severity: "error",
+        code: "token-missing",
+        message: 'Source token "[" is absent from the translation.',
+        severity: "warning",
+      },
+      {
+        code: "token-unexpected",
+        message: 'Translation adds token "![", which the source does not contain.',
+        severity: "warning",
       },
     ]);
   });
 
-  it("rejects removed emphasis and modified inline code while allowing translated prose", () => {
+  it("warns on removed emphasis and modified inline code while allowing translated prose", () => {
     expect(
       validateTokenParity(
         "Use **Acme** with _care_ and `pnpm test | tee results.txt`.",
@@ -280,9 +302,14 @@ describe("tokenization", () => {
 
     expect(validateTokenParity("Keep **this** safe.", "Gardez this en sécurité.")).toEqual([
       {
-        code: "token-count-mismatch",
-        message: "Expected 2 non-text token(s) but received 0.",
-        severity: "error",
+        code: "token-missing",
+        message: 'Source token "**" is absent from the translation.',
+        severity: "warning",
+      },
+      {
+        code: "token-missing",
+        message: 'Source token "**" is absent from the translation.',
+        severity: "warning",
       },
     ]);
 
@@ -293,15 +320,20 @@ describe("tokenization", () => {
       ),
     ).toEqual([
       {
-        code: "token-order-mismatch",
+        code: "token-missing",
+        message: 'Source token "`pnpm test | tee results.txt`" is absent from the translation.',
+        severity: "warning",
+      },
+      {
+        code: "token-unexpected",
         message:
-          'Token "`pnpm test | tee results.txt`" does not match "`npm test | tee results.txt`" at position 1.',
-        severity: "error",
+          'Translation adds token "`npm test | tee results.txt`", which the source does not contain.',
+        severity: "warning",
       },
     ]);
   });
 
-  it("rejects catastrophic Markdown formatting-scope expansion", () => {
+  it("warns on catastrophic Markdown formatting-scope expansion", () => {
     const source =
       "This gives you **99% acceptance** across the UK and EU. Read [the guide](/guide).";
     const target =
@@ -314,7 +346,7 @@ describe("tokenization", () => {
       {
         code: "token-formatting-scope-expansion",
         message: "Markdown formatting scope 1 expanded from 14 to 276 visible character(s).",
-        severity: "error",
+        severity: "warning",
       },
     ]);
   });

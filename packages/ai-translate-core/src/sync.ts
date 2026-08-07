@@ -12,6 +12,8 @@ import {
   rebindGeneratorSelfCheckAuditsForCurrentIdentity,
   resolveAcceptedContractRevision,
   resolveRequestContext,
+  usesAttestedCandidateCache,
+  usesGeneratorSelfCheck,
 } from "./acceptance";
 import {
   addressToJsonPointer,
@@ -521,7 +523,7 @@ async function readCachedCandidate(
   }
   const lookupStartedAt = performance.now();
   try {
-    if (config.validation?.semanticAuditExecution === "generator-self-check") {
+    if (usesAttestedCandidateCache(config)) {
       const candidate = await config.candidateCache.store.getAttested?.(key);
       if (candidate === undefined) {
         metrics.candidateCacheMisses += 1;
@@ -570,7 +572,7 @@ async function writeCachedCandidate(
     return;
   }
   try {
-    if (config.validation?.semanticAuditExecution === "generator-self-check") {
+    if (usesAttestedCandidateCache(config)) {
       if (selfCheck === undefined) {
         return;
       }
@@ -722,7 +724,10 @@ async function prepareProviderRequestPlan(
   const segmentDeltaConfig = config.candidateCache?.segmentDeltaReuse;
   const segments =
     segmentDeltaConfig !== undefined &&
-    config.validation?.semanticAuditExecution !== "generator-self-check" &&
+    // Splitting a message into segments leaves no single attestation covering
+    // the whole of it, so reuse has to stand down when attestations are in
+    // play — but only then, not merely because self-check is the mode.
+    !usesAttestedCandidateCache(config) &&
     canReuseTranslationSegments({
       config: segmentDeltaConfig,
       entry: miss.item.entry,
@@ -1636,7 +1641,7 @@ async function currentAcceptanceState(args: {
   // Same-context audit/validator drift: rebind generator-self-check provenance
   // onto the current identity when attested evidence still covers the text.
   if (
-    args.config.validation?.semanticAuditExecution === "generator-self-check"
+    usesGeneratorSelfCheck(args.config)
   ) {
     const selfCheckAudits = rebindGeneratorSelfCheckAuditsForCurrentIdentity({
       currentIdentities: identities.current,
@@ -1707,7 +1712,7 @@ async function currentAcceptanceState(args: {
   // generator-self-check). Revalidate the text and rekey acceptance without a
   // provider call — never regenerate solely for provenance drift.
   if (
-    args.config.validation?.semanticAuditExecution === "generator-self-check" &&
+    usesGeneratorSelfCheck(args.config) &&
     args.existingState.acceptedContractRevision !== undefined
   ) {
     const issues = await collectTranslationIssues({
@@ -2254,7 +2259,7 @@ async function prepareTask(args: {
       shouldEvaluateExistingAcceptance &&
       !skipsLegacyUnverifiedSemanticMigration &&
       existingAcceptanceState.acceptedContractRevision === undefined &&
-      config.validation?.semanticAuditExecution === "generator-self-check";
+      usesGeneratorSelfCheck(config);
 
     if (
       !translationDecision.translate &&
@@ -2290,9 +2295,7 @@ async function prepareTask(args: {
             pointer,
             ...(acceptedContractRevision === undefined &&
             (existingState?.requiresAcceptanceAudit === true ||
-              (shouldEvaluateExistingAcceptance &&
-                config.validation?.semanticAuditExecution !==
-                  "generator-self-check"))
+              (shouldEvaluateExistingAcceptance && !usesGeneratorSelfCheck(config)))
               ? { requiresAcceptanceAudit: true as const }
               : {}),
             sourceValue: sourceEntry.value,
@@ -2339,7 +2342,7 @@ async function prepareTask(args: {
         )
       : auditRepairContext ?? context;
     const selfCheckPlans =
-      config.validation?.semanticAuditExecution === "generator-self-check" &&
+      usesGeneratorSelfCheck(config) &&
       options?.dryRun !== true
         ? await resolveTranslationSelfCheckPlans(config, {
             catalogId: document.ref.catalogId,
@@ -2935,9 +2938,14 @@ async function applyProviderResponses(args: {
       locale: task.document.ref.locale,
       origin: "generated",
       pointer: item.pointer,
-      ...(config.validation?.semanticAuditExecution === "generator-self-check"
-        ? { validationAudits: generatorSelfCheck.validationAudits }
-        : { requiresAcceptanceAudit: true as const }),
+      // An empty audit record carries no information, and self-check is now the
+      // default, so writing one would add a dead object to every entry in the
+      // state file rather than to the rare audited one.
+      ...(!usesGeneratorSelfCheck(config)
+        ? { requiresAcceptanceAudit: true as const }
+        : Object.keys(generatorSelfCheck.validationAudits).length === 0
+          ? {}
+          : { validationAudits: generatorSelfCheck.validationAudits }),
       sourceValue: item.request.sourceText,
       status: "synced",
       targetValue: translatedText,

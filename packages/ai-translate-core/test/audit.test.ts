@@ -226,6 +226,7 @@ function config(args: {
     validation: {
       deterministicContractRevision: `sha256:${"b".repeat(64)}`,
       enforceAcceptanceProvenance: true,
+      semanticAuditExecution: "provider" as const,
     },
   };
 }
@@ -298,6 +299,7 @@ function multiLocaleFixture(args: {
       validation: {
         deterministicContractRevision: `sha256:${"b".repeat(64)}`,
         enforceAcceptanceProvenance: true,
+        semanticAuditExecution: "provider" as const,
       },
     },
     state,
@@ -1044,6 +1046,7 @@ describe("auditCatalogs", () => {
       validation: {
         deterministicContractRevision: `sha256:${"b".repeat(64)}`,
         enforceAcceptanceProvenance: true,
+        semanticAuditExecution: "provider" as const,
       },
     };
 

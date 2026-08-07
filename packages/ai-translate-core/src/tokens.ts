@@ -416,51 +416,93 @@ function validateMarkdownFormattingScopes(
             message:
               `Markdown formatting scope ${String(index + 1)} expanded from ` +
               `${String(sourceScope.visibleCharacters)} to ${String(targetScope.visibleCharacters)} visible character(s).`,
-            severity: "error" as const,
+            severity: "warning" as const,
           },
         ]
       : [];
   });
 }
 
+/**
+ * Placeholders and tags bind the message to the application: a placeholder the
+ * code never supplies renders as literal `{{braces}}` to the user, and a tag
+ * the runtime cannot map drops or breaks the element it wraps. Markdown is
+ * presentation, so losing emphasis is worth reporting but not worth discarding
+ * an otherwise correct translation over.
+ */
+function isStructuralToken(token: ProtectedToken): boolean {
+  return token.type === "placeholder" || token.type === "tag";
+}
+
+function tokenParityIssue(
+  token: ProtectedToken,
+  kind: "missing" | "unexpected",
+): TranslationValidationIssue {
+  return {
+    code: kind === "missing" ? "token-missing" : "token-unexpected",
+    message:
+      kind === "missing"
+        ? `Source token "${token.raw}" is absent from the translation.`
+        : `Translation adds token "${token.raw}", which the source does not contain.`,
+    severity: isStructuralToken(token) ? "error" : "warning",
+  };
+}
+
+/**
+ * Compares the *set* of protected tokens, deliberately ignoring their order.
+ *
+ * Order carries no meaning for either kind of binding this validates.
+ * Placeholders resolve by name and indexed tags by index, so a translation is
+ * free to move them wherever the target grammar needs them — German fronting
+ * `{{count}}` ahead of `{{language}}`, or Irish reordering a parenthetical, is
+ * correct output, not a defect. Enforcing position rejected those translations
+ * outright and left the string untranslated in perpetuity, because the model
+ * kept producing the same correct text on every retry.
+ */
 export function validateTokenParity(
   sourceText: string,
   targetText: string,
 ): readonly TranslationValidationIssue[] {
   const allSourceTokens = tokenizeText(sourceText);
   const allTargetTokens = tokenizeText(targetText);
-  const sourceTokens = allSourceTokens.filter(
-    (token): token is ProtectedToken => token.type !== "text",
-  );
-  const targetTokens = allTargetTokens.filter(
-    (token): token is ProtectedToken => token.type !== "text",
-  );
 
-  if (sourceTokens.length !== targetTokens.length) {
-    return [
-      {
-        code: "token-count-mismatch",
-        message: `Expected ${String(sourceTokens.length)} non-text token(s) but received ${String(targetTokens.length)}.`,
-        severity: "error",
-      },
-    ];
+  const unmatchedTargets = new Map<string, ProtectedToken[]>();
+  for (const token of allTargetTokens) {
+    if (token.type === "text") {
+      continue;
+    }
+    const signature = toSignature(token);
+    const bucket = unmatchedTargets.get(signature);
+    if (bucket) {
+      bucket.push(token);
+    } else {
+      unmatchedTargets.set(signature, [token]);
+    }
   }
 
   const issues: TranslationValidationIssue[] = [];
-  sourceTokens.forEach((token, index) => {
-    const targetToken = targetTokens[index] as ProtectedToken;
-    const position = index + 1;
-
-    if (toSignature(token) !== toSignature(targetToken)) {
-      issues.push({
-        code: "token-order-mismatch",
-        message: `Token "${token.raw}" does not match "${targetToken.raw}" at position ${String(position)}.`,
-        severity: "error",
-      });
+  for (const token of allSourceTokens) {
+    if (token.type === "text") {
+      continue;
     }
-  });
+    const bucket = unmatchedTargets.get(toSignature(token));
+    if (bucket && bucket.length > 0) {
+      bucket.pop();
+      continue;
+    }
+    issues.push(tokenParityIssue(token, "missing"));
+  }
 
-  return issues.length === 0
-    ? validateMarkdownFormattingScopes(allSourceTokens, allTargetTokens)
+  for (const bucket of unmatchedTargets.values()) {
+    for (const token of bucket) {
+      issues.push(tokenParityIssue(token, "unexpected"));
+    }
+  }
+
+  // Scope comparison pairs formatting runs by position, so it only means
+  // anything once both sides agree on which formatting tokens exist.
+  const formattingBalanced = !issues.some((issue) => issue.severity === "warning");
+  return formattingBalanced
+    ? [...issues, ...validateMarkdownFormattingScopes(allSourceTokens, allTargetTokens)]
     : issues;
 }

@@ -49,9 +49,13 @@ Because every entry carries the digests that produced it, a run can prove what i
 }
 ```
 
-### Nothing is written without being checked
+### Checked where it counts, quiet everywhere else
 
-Deterministic validation runs first, then optional semantic audits. A candidate that fails is retried or quarantined, never silently shipped — so a bad generation costs you a retry, not a production string in a language you cannot read.
+Validation blocks on the things that break your app — a placeholder the code supplies but the translation dropped, an invented one that would render as literal `{{braces}}`, markup the runtime cannot map. Those cost a retry rather than a production string in a language you cannot read.
+
+It deliberately stays out of the way everywhere else. Word order is the translator's business, not the validator's: German fronting `{{count}}` ahead of `{{language}}` is correct output, and a tool that rejects it discards a good translation and leaves the string in English forever. Cosmetic differences like dropped emphasis are reported as warnings and ship.
+
+Semantic preservation rides along with the translation request by default, so it costs no extra model calls. Set `validation.semanticAuditExecution: "provider"` when you want a second model to re-read the output independently.
 
 ## Install
 

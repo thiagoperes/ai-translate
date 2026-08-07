@@ -42,6 +42,42 @@ export function withTranslationIssueCache<Result>(
   return translationIssueCacheStorage.run(new WeakMap(), operation);
 }
 
+/**
+ * Semantic preservation defaults to riding along with the translation request
+ * rather than a separate replay, because the self-check costs no extra provider
+ * calls and catches the same class of drift. Opting in to `provider` buys a
+ * second model's opinion at one or two calls per audit batch.
+ *
+ * Every caller must go through here: the mode is read in a dozen places, and an
+ * inverted comparison at any one of them would silently split the pipeline
+ * between the two strategies.
+ */
+export function usesGeneratorSelfCheck(
+  config: Pick<AiTranslateConfig, "validation"> | undefined
+): boolean {
+  return config?.validation?.semanticAuditExecution !== "provider";
+}
+
+/**
+ * Self-check mode caches candidates through `getAttested`/`putAttested` so a
+ * cache hit carries the model's attestation with it. Those methods are
+ * optional, and a store without them silently caches nothing.
+ *
+ * With no semantic audits configured there are no facets to attest, so nothing
+ * ever demands an attestation and the plain `get`/`put` path is both correct
+ * and the only one an ordinary store implements. Keying off the mode alone
+ * would switch every such store onto a road it cannot drive down — no error,
+ * just a cache that quietly stops working and a model bill that doubles.
+ */
+export function usesAttestedCandidateCache(
+  config: Pick<AiTranslateConfig, "semanticAudits" | "validation"> | undefined
+): boolean {
+  return (
+    usesGeneratorSelfCheck(config) &&
+    (config?.semanticAudits?.length ?? 0) > 0
+  );
+}
+
 export function isLegacyAcceptanceMigrationExempt(args: {
   config: AiTranslateConfig;
   sourceText: string;

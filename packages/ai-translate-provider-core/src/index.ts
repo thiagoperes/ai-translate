@@ -3458,12 +3458,17 @@ export class StructuredTranslationProvider implements TranslationProvider {
           );
           return;
         }
+        // Every token here was masked out of the prompt and has to be echoed
+        // back verbatim, so a parity difference means the model broke the
+        // protection contract rather than exercising translator judgement.
+        // Warnings are tolerated at the acceptance gate, but not at this
+        // boundary: discarding the candidate costs a retry, while keeping it
+        // silently ships text with a URL or code span missing.
         const tokenIssues = validateTokenParity(request.sourceText, restored);
-        const tokenErrors = tokenIssues.filter((issue) => issue.severity === "error");
-        if (tokenErrors.length > 0) {
+        if (tokenIssues.length > 0) {
           candidateFailures.push(
             `candidate-${String(candidateIndex)}:${[
-              ...new Set(tokenErrors.map(({ code }) => code)),
+              ...new Set(tokenIssues.map(({ code }) => code)),
             ].join("+")}`,
           );
           return;

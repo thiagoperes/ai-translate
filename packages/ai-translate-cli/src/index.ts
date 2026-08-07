@@ -1,6 +1,7 @@
 import {
   auditCatalogs,
   syncCatalogs,
+  usesGeneratorSelfCheck,
   validateCatalogs,
   withTranslationIssueCache,
 } from "@ai-translate/core";
@@ -233,7 +234,7 @@ async function convergeSemanticAudits(
     options.dryRun === true ||
     sync.metrics.failedEntries > 0 ||
     (config.semanticAudits?.length ?? 0) === 0 ||
-    config.validation?.semanticAuditExecution === "generator-self-check"
+    usesGeneratorSelfCheck(config)
   ) {
     return { audit: undefined, repairRounds: 0, sync };
   }

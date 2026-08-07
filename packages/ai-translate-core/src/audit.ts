@@ -6,6 +6,7 @@ import {
   resolveAcceptedContractRevision,
   resolveRequestContext,
   type SemanticAuditAcceptanceIdentity,
+  usesGeneratorSelfCheck,
 } from "./acceptance";
 import {
   addressToJsonPointer,
@@ -198,7 +199,7 @@ function acceptanceIdentity(
     acceptanceMode:
       statusFromDeterministic(candidate) === "accepted"
         ? "deterministic"
-        : config?.validation?.semanticAuditExecution === "generator-self-check"
+        : usesGeneratorSelfCheck(config)
         ? "generator-self-check"
         : "provider",
     auditMode: candidate.audit.mode ?? "dual",
@@ -548,7 +549,7 @@ function acceptanceIdentityForArtifact(args: {
   return {
     acceptanceMode: deterministicAccepted
       ? "deterministic"
-      : config.validation?.semanticAuditExecution === "generator-self-check"
+      : usesGeneratorSelfCheck(config)
       ? "generator-self-check"
       : "provider",
     adversarialModelId: audit.adversarialModelId,
@@ -631,7 +632,7 @@ export async function resolveTranslationSelfCheckPlans(
   config: AiTranslateConfig,
   args: SemanticAuditAnalysisArgs
 ): Promise<readonly TranslationSelfCheckPlan[]> {
-  if (config.validation?.semanticAuditExecution !== "generator-self-check") {
+  if (!usesGeneratorSelfCheck(config)) {
     return [];
   }
 
@@ -671,7 +672,7 @@ export async function createGeneratorSelfCheckValidation(
     plans: readonly TranslationSelfCheckPlan[];
   }
 ): Promise<GeneratorSelfCheckValidationResult> {
-  if (config.validation?.semanticAuditExecution !== "generator-self-check") {
+  if (!usesGeneratorSelfCheck(config)) {
     return { issues: [], validationAudits: {} };
   }
 
@@ -1815,7 +1816,7 @@ export async function auditCatalogs(
 
     if (
       options.checkOnly ||
-      config.validation?.semanticAuditExecution === "generator-self-check"
+      usesGeneratorSelfCheck(config)
     ) {
       issues.push(
         issue(

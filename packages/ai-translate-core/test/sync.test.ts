@@ -829,6 +829,7 @@ describe("syncCatalogs", () => {
       sourceLocale: "en",
       state,
       targetLocales: ["de"],
+      validation: { semanticAuditExecution: "provider" },
     };
 
     const rejected = await auditCatalogs(translationConfig);
@@ -3114,7 +3115,7 @@ describe("syncCatalogs", () => {
 
     expect(validation.issues).toContainEqual(
       expect.objectContaining({
-        code: "token-count-mismatch",
+        code: "token-missing",
         severity: "warning",
       })
     );
@@ -3839,6 +3840,59 @@ describe("translation guardrails", () => {
     expect([...candidates.values()]).toEqual(["fr:Body"]);
   });
 
+  it("still caches through a store that implements only get and put", async () => {
+    // Self-check is the default execution mode, and it reads and writes
+    // candidates through the optional getAttested/putAttested pair. An ordinary
+    // store implements neither, and both call sites bail out silently when they
+    // are absent — so keying the attested path off the mode alone would turn
+    // caching off for every such store with no error and no failing assertion
+    // anywhere else in this suite.
+    const catalog = createMemoryCatalog();
+    seedSource(catalog, [stringEntry("title", "Title")]);
+    const candidates = new Map<string, string>();
+    const result = await syncCatalogs({
+      candidateCache: {
+        identity: {
+          modelId: "model-v1",
+          providerId: "provider",
+          providerRevision: "provider-v1",
+        },
+        store: {
+          get(key) {
+            return Promise.resolve(candidates.get(key.digest));
+          },
+          promote() {
+            return Promise.resolve();
+          },
+          put(key, translation) {
+            candidates.set(key.digest, translation);
+            return Promise.resolve();
+          },
+          reject() {
+            return Promise.resolve();
+          },
+        },
+      },
+      catalogs: [catalog],
+      generationRevision: "generation-v1",
+      provider: {
+        translate: ({ requests }) =>
+          Promise.resolve(
+            requests.map((request) => ({
+              key: request.key,
+              translation: `fr:${request.sourceText}`,
+            }))
+          ),
+      },
+      sourceLocale: "en",
+      state: createStateStore(),
+      targetLocales: ["fr"],
+    });
+
+    expect(result.metrics.candidateCacheWrites).toBe(1);
+    expect([...candidates.values()]).toEqual(["fr:Title"]);
+  });
+
   it("caches completed in-flight locale groups before surfacing a provider failure", async () => {
     const catalog = createMemoryCatalog();
     seedSource(catalog, [
@@ -4527,13 +4581,13 @@ describe("translation guardrails", () => {
       state,
       targetLocales: ["fr"],
       validation: {
-        existingIssueSeverity: { "token-count-mismatch": "error" },
+        existingIssueSeverity: { "token-missing": "error" },
       },
     });
 
     expect(validation.issues).toContainEqual(
       expect.objectContaining({
-        code: "token-count-mismatch",
+        code: "token-missing",
         jsonPointer: "/body",
         severity: "error",
       })
