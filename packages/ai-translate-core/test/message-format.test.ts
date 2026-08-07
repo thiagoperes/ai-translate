@@ -66,14 +66,14 @@ describe("createMessageFormatRegistry", () => {
     // Falling back would validate ICU plurals with the flat tokenizer and
     // accept output that breaks at runtime.
     expect(() => createMessageFormatRegistry({}).resolve("icu")).toThrow(
-      /Unknown message format "icu"/,
+      /Unknown message format "icu"/u,
     );
   });
 
   it("names the registered ids so a typo is self-correcting", () => {
     const registry = createMessageFormatRegistry({ formats: [stubFormat("icu")] });
 
-    expect(() => registry.resolve("ICU")).toThrow(/Registered formats: icu, plain/);
+    expect(() => registry.resolve("ICU")).toThrow(/Registered formats: icu, plain/u);
   });
 
   it("accepts the same format object advertised by several catalogs", () => {
@@ -91,7 +91,7 @@ describe("createMessageFormatRegistry", () => {
       createMessageFormatRegistry({
         catalogs: [stubCatalog("a", [stubFormat("icu")]), stubCatalog("b", [stubFormat("icu")])],
       }),
-    ).toThrow(/Two different message formats are registered as "icu"/);
+    ).toThrow(/Two different message formats are registered as "icu"/u);
   });
 });
 

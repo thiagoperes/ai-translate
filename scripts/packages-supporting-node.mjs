@@ -24,7 +24,7 @@ const packagesDir = path.join(rootDir, "packages");
  * looks right and tests the wrong set of packages.
  */
 function parseMinimum(range, packageName) {
-  const match = /^>=(\d+)\.(\d+)\.(\d+)$/.exec(range.trim());
+  const match = /^>=(\d+)\.(\d+)\.(\d+)$/u.exec(range.trim());
   if (match === null) {
     throw new Error(
       `${packageName} declares engines.node as "${range}". This script only understands ">=x.y.z". ` +
@@ -35,7 +35,7 @@ function parseMinimum(range, packageName) {
 }
 
 function parseVersion(version) {
-  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version.trim());
+  const match = /^(\d+)\.(\d+)\.(\d+)$/u.exec(version.trim());
   if (match === null) {
     throw new Error(`Expected a Node version as "x.y.z", received "${version}".`);
   }

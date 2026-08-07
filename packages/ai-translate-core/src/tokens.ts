@@ -10,7 +10,7 @@ import type {
 } from "./types";
 
 const TOKEN_PATTERN =
-  /\]\((?:<[^>\n]+>|[^)\s]+)(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\)|<\/?(?:[A-Za-z][\w:-]*|\d+)(?:\s+[^<>]*?)?\s*\/?>|\{\{[^{}]+\}\}|\{[^{}]+\}/g;
+  /\]\((?:<[^>\n]+>|[^)\s]+)(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\)|<\/?(?:[A-Za-z][\w:-]*|\d+)(?:\s+[^<>]*?)?\s*\/?>|\{\{[^{}]+\}\}|\{[^{}]+\}/gu;
 
 interface ProtectedMatch {
   index: number;
@@ -27,10 +27,10 @@ function parseTagToken(raw: string): TagToken {
   const isClose = raw.startsWith("</");
   const isSelf = raw.endsWith("/>");
   const inner = raw.slice(isClose ? 2 : 1, raw.length - (isSelf ? 2 : 1)).trim();
-  const [name = ""] = inner.split(/\s+/, 1);
+  const [name = ""] = inner.split(/\s+/u, 1);
 
   return {
-    flavor: /^\d+$/.test(name) ? "slot" : /^[A-Z]/.test(name) ? "component" : "html",
+    flavor: /^\d+$/u.test(name) ? "slot" : /^[A-Z]/u.test(name) ? "component" : "html",
     name,
     raw,
     tagKind: isClose ? "close" : isSelf ? "self" : "open",
@@ -360,6 +360,10 @@ function visibleTokenCharacters(token: Token): number {
   ) {
     return 0;
   }
+  // Code points, not graphemes: this width feeds the formatting-scope
+  // comparison between source and target, where both sides are measured the
+  // same way, so a consistent unit matters more than a human-visible one.
+  // oxlint-disable-next-line typescript/no-misused-spread
   return [...token.raw].length;
 }
 

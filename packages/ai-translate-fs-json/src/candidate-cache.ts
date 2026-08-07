@@ -84,8 +84,11 @@ function isAttestedCandidate(
   return (
     typeof candidate.translation === "string" &&
     typeof candidate.selfCheck === "object" &&
-    candidate.selfCheck !== null &&
-    candidate.selfCheck.verified === true &&
+    // Compared against `true` rather than tested for truthiness because this
+    // value came from a cache file on disk. The declared type says `boolean`,
+    // but nothing has checked that yet, and this guard is what does it.
+    // oxlint-disable-next-line typescript/no-unnecessary-boolean-literal-compare
+    candidate.selfCheck?.verified === true &&
     typeof candidate.selfCheck.modelId === "string" &&
     candidate.selfCheck.modelId.length > 0 &&
     Array.isArray(candidate.selfCheck.planDigests) &&

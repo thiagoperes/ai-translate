@@ -37,7 +37,10 @@ interface MarkdocParseError {
 }
 
 const requireMarkdoc = createRequire(import.meta.url);
-const { parse: parseMarkdoc } = requireMarkdoc("@markdoc/markdoc") as MarkdocRuntime;
+const markdocRuntime = requireMarkdoc("@markdoc/markdoc") as MarkdocRuntime;
+// Kept as a method call so the runtime stays the receiver, rather than
+// depending on Markdoc's `parse` happening not to use `this`.
+const parseMarkdoc = (source: string): unknown => markdocRuntime.parse(source);
 
 interface BodyBinding {
   kind: "line" | "table-cell";
@@ -147,7 +150,7 @@ function collectMarkdocParseErrors(node: unknown, errors: MarkdocParseError[]): 
     );
   }
   if (Array.isArray(candidate.children)) {
-    candidate.children.forEach((child) => collectMarkdocParseErrors(child, errors));
+    candidate.children.forEach((child) => { collectMarkdocParseErrors(child, errors); });
   }
 }
 
@@ -744,7 +747,7 @@ export function createMarkdocCatalog(options: MarkdocCatalogOptions): CatalogAda
           ? {}
           : { target: target as LoadedDocument<MarkdocDocumentState> }),
       });
-      (next.state as MarkdocDocumentState).initialBodyValues = bodyValuesByNode(next.entries);
+      (next.state).initialBodyValues = bodyValuesByNode(next.entries);
       if (frontmatterResult.reconciliation) {
         next.reconciliation = {
           previousPointers: {

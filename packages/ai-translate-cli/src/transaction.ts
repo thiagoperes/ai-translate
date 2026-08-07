@@ -11,9 +11,11 @@ import type {
   LoadedDocument,
   ScaffoldLocaleOptions,
   ScaffoldLocaleResult,
+  SyncStateLoadScope,
   SyncStateSnapshot,
   SyncStateStore,
 } from "@ai-translate/core/types";
+import { supportsScopedSave } from "@ai-translate/core/types";
 import type {
   DurableDocumentChange,
 } from "@ai-translate/fs-json";
@@ -166,7 +168,7 @@ class StagedCatalogs {
   }
 
   async durableChanges(): Promise<readonly DurableDocumentChange[]> {
-    return await Promise.all(
+    return  Promise.all(
       [...this.files.values()].map(async (staged) => ({
         ...(staged.mode === undefined ? {} : { mode: staged.mode }),
         next: await fs.readFile(staged.tempPath),
@@ -383,9 +385,19 @@ export async function runStagedCatalogTransaction<T>(
   config: AiTranslateConfig,
   operation: (stagedConfig: AiTranslateConfig) => Promise<T>,
   shouldCommit: (result: T) => boolean = () => true,
+  scope?: SyncStateLoadScope,
 ): Promise<T> {
+  /*
+   * Staging copies the snapshot several times between here and the commit, so
+   * loading locales the run cannot touch is the dominant cost of a narrow sync.
+   * The scope is only honoured by stores that merge on save; everywhere else the
+   * snapshot still has to describe the whole corpus, because omission means
+   * deletion.
+   */
+  const saveScope = supportsScopedSave(config.state) ? scope : undefined;
+
   return config.state.withLock(async () => {
-    const initialState = await config.state.load();
+    const initialState = await config.state.load(saveScope);
     const stagedState = new StagedStateStore(initialState);
     const stagedCatalogs = new StagedCatalogs(config.catalogs, config.sourceLocale);
     const stagedConfig: AiTranslateConfig = {
@@ -407,6 +419,7 @@ export async function runStagedCatalogTransaction<T>(
             documents,
             initialState: cloneState(initialState),
             nextState: stagedState.stagedSnapshot(),
+            ...(saveScope === undefined ? {} : { scope: saveScope }),
           });
         }
       } else {
@@ -415,7 +428,7 @@ export async function runStagedCatalogTransaction<T>(
           await stagedCatalogs.promote();
           if (stagedState.hasChanges()) {
             stateSaveAttempted = true;
-            await config.state.save(stagedState.stagedSnapshot());
+            await config.state.save(stagedState.stagedSnapshot(), saveScope);
           }
         } catch (error) {
           const rollbackErrors: unknown[] = [];
@@ -426,7 +439,7 @@ export async function runStagedCatalogTransaction<T>(
           }
           if (stateSaveAttempted) {
             try {
-              await config.state.save(cloneState(initialState));
+              await config.state.save(cloneState(initialState), saveScope);
             } catch (rollbackError) {
               rollbackErrors.push(rollbackError);
             }

@@ -230,8 +230,8 @@ async function main() {
   for (const row of batches) {
     console.log(
       `${String(row.batchSize).padStart(5)}   ${String(row.calls).padStart(5)}   ` +
-        `${String(row.systemPromptTokens).padStart(13)}   ${String(row.promptOverheadTokensPerKey).padStart(19)}   ` +
-        `${String(row.totalTokensPerKey).padStart(16)}`,
+        `${String(row.systemPromptTokens).padStart(13)}   ` +
+        `${String(row.promptOverheadTokensPerKey).padStart(19)}   ${String(row.totalTokensPerKey).padStart(16)}`,
     );
   }
   console.log(`\nprefix caching (needs >= ${PREFIX_CACHE_MINIMUM_TOKENS} tokens of exact prefix)`);

@@ -531,7 +531,7 @@ describe("TestTranslationProvider", () => {
       activeRequests += 1;
       peakRequests = Math.max(peakRequests, activeRequests);
       try {
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        await new Promise((resolve) => { setTimeout(resolve, 10); });
         const messages = args.messages as readonly { content: string; role: string }[];
         const payload = JSON.parse(messages[1]?.content ?? "{}") as {
           requests: readonly { key: string }[];
@@ -589,7 +589,7 @@ describe("TestTranslationProvider", () => {
       startedKeys.push(key);
       activeRequests += 1;
       try {
-        await new Promise((resolve) => setTimeout(resolve, key === "a" ? 5 : 25));
+        await new Promise((resolve) => { setTimeout(resolve, key === "a" ? 5 : 25); });
         if (key === "a") {
           throw Object.assign(new Error("invalid request"), { status: 400 });
         }
@@ -618,7 +618,7 @@ describe("TestTranslationProvider", () => {
       requests: ["a", "b", "c", "d"].map((key) => createRequest(key, "Hello")),
     });
     activeAtResolution = activeRequests;
-    await new Promise((resolve) => setTimeout(resolve, 35));
+    await new Promise((resolve) => { setTimeout(resolve, 35); });
 
     expect(result).toEqual([{ key: "b", translation: "Hallo" }]);
     expect(activeAtResolution).toBe(0);
@@ -648,7 +648,9 @@ describe("TestTranslationProvider", () => {
 
   it("enforces a wall-clock deadline when an injected transport ignores its timeout option", async () => {
     const { transport } = createMockTransport(
-      () => new Promise<ParseResponse>(() => undefined),
+      () => new Promise<ParseResponse>(() => {
+        // Never settles: the provider's own deadline must fire.
+      }),
     );
     const provider = new TestTranslationProvider({
       transport,
@@ -3835,7 +3837,7 @@ describe("TestTranslationProvider", () => {
       requestBatches.push(keys);
       activeRequests += 1;
       peakRequests = Math.max(peakRequests, activeRequests);
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => { setTimeout(resolve, 10); });
       activeRequests -= 1;
       return {
         choices: [

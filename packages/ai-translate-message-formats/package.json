@@ -46,7 +46,7 @@
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "oxlint -c ../../.oxlintrc.json --deny-warnings src test vitest.config.ts tsdown.config.ts",
+    "lint": "oxlint -c ../../.oxlintrc.json --type-aware --deny-warnings src test vitest.config.ts tsdown.config.ts",
     "test": "vitest run --config vitest.config.ts",
     "coverage": "vitest run --config vitest.config.ts --coverage",
     "test:pack": "publint . && attw --pack . --profile esm-only"

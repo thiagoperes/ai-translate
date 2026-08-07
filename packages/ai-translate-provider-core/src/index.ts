@@ -888,7 +888,7 @@ function retryDelayMs(attempt: number, error: unknown): number {
 }
 
 async function waitBeforeRetry(attempt: number, error: unknown): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, retryDelayMs(attempt, error)));
+  await new Promise((resolve) => { setTimeout(resolve, retryDelayMs(attempt, error)); });
 }
 
 function protectedCodeSourceLiterals(value: string): readonly string[] {
@@ -1483,6 +1483,9 @@ async function runWithConcurrency<T, TResult>(
   );
   await Promise.all(workers);
   if (failed) {
+    // Rethrown verbatim: wrapping it would replace the original error and its
+    // stack with a stringified copy.
+    // oxlint-disable-next-line no-throw-literal
     throw firstError;
   }
   return results;
@@ -3195,6 +3198,9 @@ export class StructuredTranslationProvider implements TranslationProvider {
     // Missing keys remain failed in the same transaction, so the release still
     // stops immediately without discarding already-paid successful responses.
     if (completed.size === 0 && translationError !== undefined) {
+      // Rethrown verbatim: wrapping it would replace the original error and its
+      // stack with a stringified copy.
+      // oxlint-disable-next-line no-throw-literal
       throw translationError;
     }
     return args.requests.flatMap((request) => {
@@ -3414,7 +3420,7 @@ export class StructuredTranslationProvider implements TranslationProvider {
       }
       if (
         request.selfCheckPlans !== undefined &&
-        (!("verified" in translation) || translation.verified !== true)
+        (!("verified" in translation) || ! translation.verified)
       ) {
         invalidReasons.set(originalKey, "missing-generator-self-check");
         continue;

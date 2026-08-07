@@ -289,6 +289,9 @@ async function runWithConcurrency<T, TResult>(
   );
   await Promise.all(workers);
   if (failed) {
+    // Rethrown verbatim: wrapping it would replace the original error and its
+    // stack with a stringified copy.
+    // oxlint-disable-next-line no-throw-literal
     throw firstError;
   }
   return results;

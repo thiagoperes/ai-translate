@@ -62,7 +62,7 @@ export function jsonPointerToAddress(pointer: string): AddressSegment[] {
         };
       }
 
-      if (/^\d+$/.test(decoded)) {
+      if (/^\d+$/u.test(decoded)) {
         return {
           index: Number(decoded),
           kind: "index",

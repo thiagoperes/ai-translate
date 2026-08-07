@@ -563,7 +563,7 @@ describe("runStagedCatalogTransaction", () => {
         failed = true;
         throw new Error("state shard promotion failed");
       }
-      return await rename(from, to);
+      await rename(from, to);
     });
 
     await expect(
@@ -620,7 +620,7 @@ describe("runStagedCatalogTransaction", () => {
         recoveryFailed = true;
         throw new Error("recovery interrupted");
       }
-      return await rename(from, to);
+      await rename(from, to);
     });
     const firstRestart = createShardedJsonStateStore({ rootDir });
     await expect(firstRestart.withLock(async () => undefined)).rejects.toThrow(

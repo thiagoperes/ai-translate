@@ -12,7 +12,7 @@ export const I18NEXT_MESSAGE_FORMAT_ID = "i18next";
 
 /** i18next nesting: `$t(common:greeting)` inlines another key at runtime. The
  * argument is a key, never prose, so it must survive translation verbatim. */
-const NESTING_PATTERN = /\$t\([^()]*\)/g;
+const NESTING_PATTERN = /\$t\([^()]*\)/gu;
 
 function nestingCalls(value: string): readonly string[] {
   return [...value.matchAll(NESTING_PATTERN)]
@@ -50,7 +50,7 @@ function validateI18nextParity(args: MessageParityArgs): readonly TranslationVal
 export function createI18nextMessageFormat(options: { id?: string } = {}): MessageFormat {
   return {
     id: options.id ?? I18NEXT_MESSAGE_FORMAT_ID,
-    tokenize: plainMessageFormat.tokenize,
+    tokenize: (text) => plainMessageFormat.tokenize(text),
     validateParity: validateI18nextParity,
   };
 }

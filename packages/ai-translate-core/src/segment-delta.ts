@@ -60,7 +60,8 @@ export function splitTranslationDeltaSegments(
   const maxSegments = config.maxSegments ?? DEFAULT_MAX_SEGMENTS;
 
   if (
-    config.enabled !== true ||
+    !
+    config.enabled ||
     sourceText.length < minSourceLength ||
     sourceText.trim() !== sourceText ||
     /[\r\n]/u.test(sourceText)
@@ -113,7 +114,8 @@ export function canReuseTranslationSegments(args: {
   return (
     args.config?.enabled === true &&
     args.request.contentRole === "body" &&
-    args.semanticAuditRepair === false &&
+    !
+    args.semanticAuditRepair &&
     (args.entry.storage === "markdoc" || args.entry.storage === "string") &&
     (args.entry.tokens === undefined || args.entry.tokens.every((token) => token.type === "text")) &&
     (args.request.context?.constraints?.length ?? 0) === 0

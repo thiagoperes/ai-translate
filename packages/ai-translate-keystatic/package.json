@@ -43,7 +43,7 @@
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "oxlint -c ../../.oxlintrc.json --deny-warnings src test vitest.config.ts tsdown.config.ts",
+    "lint": "oxlint -c ../../.oxlintrc.json --type-aware --deny-warnings src test vitest.config.ts tsdown.config.ts",
     "test": "vitest run --config vitest.config.ts",
     "coverage": "vitest run --config vitest.config.ts --coverage",
     "coverage:strict": "vitest run --config vitest.config.ts --coverage --coverage.include=src/index.ts --coverage.thresholds.lines=95 --coverage.thresholds.functions=95 --coverage.thresholds.branches=95 --coverage.thresholds.statements=95",

@@ -1,5 +1,6 @@
 import {
   auditCatalogs,
+  resolveStateScope,
   syncCatalogs,
   usesGeneratorSelfCheck,
   validateCatalogs,
@@ -269,6 +270,7 @@ async function syncWithSemanticAuditConvergence(
     config,
     (stagedConfig) => convergeSemanticAudits(stagedConfig, options),
     (result) => semanticAuditConvergenceError(result) === undefined,
+    resolveStateScope(config, options),
   );
 }
 
@@ -381,7 +383,7 @@ async function scaffoldLocale(
         return null;
       }
 
-      return await catalog.scaffoldLocale({
+      return  catalog.scaffoldLocale({
         ...(options.fromLocale === undefined ? {} : { fromLocale: options.fromLocale }),
         locale,
         ...(options.strategy === undefined ? {} : { strategy: options.strategy }),

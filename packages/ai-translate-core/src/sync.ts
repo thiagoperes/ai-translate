@@ -63,6 +63,7 @@ import type {
   SyncMetrics,
   SyncResult,
   SyncStateEntry,
+  SyncStateLoadScope,
   SyncStateSnapshot,
   TranslationCandidateCacheKey,
   TranslationAttestedCandidate,
@@ -593,11 +594,14 @@ async function writeCachedCandidate(
       if (selfCheck === undefined) {
         return;
       }
-      const putAttested = config.candidateCache.store.putAttested;
-      if (putAttested === undefined) {
+      // Called through the store rather than lifted into a local: the store is
+      // supplied by the caller and may well be a class instance, which loses
+      // `this` the moment the method is detached.
+      const { store } = config.candidateCache;
+      if (store.putAttested === undefined) {
         return;
       }
-      await putAttested(key, { selfCheck, translation });
+      await store.putAttested(key, { selfCheck, translation });
     } else {
       await config.candidateCache.store.put(key, translation);
     }
@@ -1363,6 +1367,10 @@ function auditDiagnosticReason(reason: unknown): string | undefined {
   if (typeof reason !== "string") {
     return undefined;
   }
+  // Iterated by code point deliberately: the scan replaces control characters,
+  // and indexing by UTF-16 unit would split a surrogate pair into two units
+  // that are neither. Grapheme clusters are irrelevant to that test.
+  // oxlint-disable-next-line typescript/no-misused-spread
   const normalized = [...reason]
     .map((character) => {
       const codePoint = character.codePointAt(0) ?? 0;
@@ -1410,16 +1418,13 @@ function semanticAuditRepairContext(
 
     return evaluations.map((evaluation) => {
       const reason = auditDiagnosticReason(evaluation.reason);
+      const reasonNote =
+        reason === undefined ? "" : `Untrusted diagnostic reason: ${JSON.stringify(reason)}. `;
+      const guidance =
+        "Preserve the English meaning, polarity, scope, attribution, and qualifiers in a materially corrected translation.";
       return {
         kind: "validator-feedback" as const,
-        note:
-          `Semantic audit "${auditId}" found requirement "${evaluation.requirementId}" was ${evaluation.verdict}. ` +
-          `${
-            reason
-              ? `Untrusted diagnostic reason: ${JSON.stringify(reason)}. `
-              : ""
-          }` +
-          "Preserve the English meaning, polarity, scope, attribution, and qualifiers in a materially corrected translation.",
+        note: `Semantic audit "${auditId}" found requirement "${evaluation.requirementId}" was ${evaluation.verdict}. ${reasonNote}${guidance}`,
         value: `semantic-audit:${auditId}:${evaluation.requirementId}:${evaluation.verdict}`,
       };
     });
@@ -1433,7 +1438,13 @@ function semanticAuditRepairContext(
   });
 }
 
-function resolveTargetLocales(
+/**
+ * Exported so a caller that wraps a sync can scope state to exactly the locales
+ * the sync will write. Recomputing the rule at the call site would let the two
+ * drift, and a scope that disagrees with the run is precisely what a scoped save
+ * must never receive.
+ */
+export function resolveTargetLocales(
   config: AiTranslateConfig,
   options: SyncCatalogsOptions
 ): string[] {
@@ -1445,6 +1456,26 @@ function resolveTargetLocales(
   }
 
   return targetLocales;
+}
+
+/**
+ * The scope a run may narrow its state to, or `undefined` when it may not.
+ *
+ * Narrowing is only worth it when the run really is narrower: a scope naming
+ * every configured locale saves nothing and makes the store merge shard by
+ * shard instead of rewriting them. It would also change behaviour, because a
+ * scoped save preserves what it does not mention — so a locale dropped from the
+ * config would keep its state forever instead of being pruned by the next full
+ * sync. Both reasons point the same way, so full runs stay unscoped.
+ */
+export function resolveStateScope(
+  config: AiTranslateConfig,
+  options: SyncCatalogsOptions
+): SyncStateLoadScope | undefined {
+  const targetLocales = resolveTargetLocales(config, options);
+  const configured = new Set(config.targetLocales);
+  const narrows = targetLocales.length < configured.size;
+  return narrows ? { locales: targetLocales } : undefined;
 }
 
 function resolveCatalogs(
@@ -1645,8 +1676,7 @@ async function currentAcceptanceState(args: {
     };
   }
   if (
-    args.existingState === undefined ||
-    args.existingState.origin !== "generated" ||
+    args.existingState?.origin !== "generated" ||
     args.existingState.status !== "synced" ||
     args.existingState.requiresAcceptanceAudit === true ||
     args.existingState.sourceDigest !== digestValue(args.sourceText) ||
@@ -2542,6 +2572,9 @@ async function runWithConcurrency<T, TResult>(
   );
   await Promise.all(workers);
   if (hasError) {
+    // Rethrown verbatim: wrapping it would replace the original error and its
+    // stack with a stringified copy.
+    // oxlint-disable-next-line no-throw-literal
     throw firstError;
   }
   return results;
@@ -3271,6 +3304,9 @@ async function translateTasksOnce(
     )
   );
   if (hasTranslationError) {
+    // Rethrown verbatim: wrapping it would replace the original error and its
+    // stack with a stringified copy.
+    // oxlint-disable-next-line no-throw-literal
     throw translationError;
   }
   return resolvedTasks;
@@ -4225,7 +4261,7 @@ export async function syncCatalogs(
    * entry means deleting it.
    */
   const saveScope = supportsScopedSave(config.state)
-    ? { locales: targetLocales }
+    ? resolveStateScope(config, options)
     : undefined;
 
   const runSync = async (): Promise<SyncResult> => {

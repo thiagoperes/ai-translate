@@ -239,11 +239,11 @@ describe("json state store", () => {
     let releaseOrder = "";
     await Promise.all([
       store.withLock(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 25));
+        await new Promise((resolve) => { setTimeout(resolve, 25); });
         releaseOrder += "first;";
       }),
       (async () => {
-        await new Promise((resolve) => setTimeout(resolve, 5));
+        await new Promise((resolve) => { setTimeout(resolve, 5); });
         await store.withLock(async () => {
           releaseOrder += "second;";
         });

@@ -144,7 +144,7 @@ export function createJsonStateStore(
             );
           }
 
-          await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+          await new Promise((resolve) => { setTimeout(resolve, retryDelayMs); });
         }
       }
 

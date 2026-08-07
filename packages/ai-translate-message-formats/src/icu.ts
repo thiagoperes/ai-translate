@@ -114,7 +114,7 @@ function tokenizeElements(elements: readonly MessageFormatElement[], tokens: Tok
       }
       case TYPE.tag: {
         tokens.push({
-          flavor: /^[A-Z]/.test(node.value) ? "component" : "html",
+          flavor: /^[A-Z]/u.test(node.value) ? "component" : "html",
           name: node.value,
           raw: `<${node.value}>`,
           tagKind: "open",
@@ -122,7 +122,7 @@ function tokenizeElements(elements: readonly MessageFormatElement[], tokens: Tok
         });
         tokenizeElements(node.children, tokens);
         tokens.push({
-          flavor: /^[A-Z]/.test(node.value) ? "component" : "html",
+          flavor: /^[A-Z]/u.test(node.value) ? "component" : "html",
           name: node.value,
           raw: `</${node.value}>`,
           tagKind: "close",

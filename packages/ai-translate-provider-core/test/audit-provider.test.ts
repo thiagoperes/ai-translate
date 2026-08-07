@@ -18,7 +18,7 @@ import {
   type StructuredSemanticAuditProviderOptions,
 } from "../src/index";
 
-type ParseImplementation = (args: StructuredCompletionRequest) => unknown | Promise<unknown>;
+type ParseImplementation = (args: StructuredCompletionRequest) => unknown;
 
 /**
  * Cases that stub `auditBatch` never reach a vendor. Handing them a transport
@@ -601,7 +601,7 @@ describe("TestSemanticAuditProvider", () => {
       activeRequests += 1;
       peakRequests = Math.max(peakRequests, activeRequests);
       try {
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        await new Promise((resolve) => { setTimeout(resolve, 10); });
         const messages = args.messages as readonly { content: string; role: string }[];
         const body = JSON.parse(messages[1]?.content ?? "{}") as {
           requests: readonly { key: string }[];
@@ -639,7 +639,7 @@ describe("TestSemanticAuditProvider", () => {
       startedKeys.push(key);
       activeRequests += 1;
       try {
-        await new Promise((resolve) => setTimeout(resolve, key === "a" ? 5 : 25));
+        await new Promise((resolve) => { setTimeout(resolve, key === "a" ? 5 : 25); });
         if (key === "a") {
           throw Object.assign(new Error("invalid request"), { status: 400 });
         }
@@ -662,7 +662,7 @@ describe("TestSemanticAuditProvider", () => {
       activeAtRejection = activeRequests;
       return error;
     });
-    await new Promise((resolve) => setTimeout(resolve, 35));
+    await new Promise((resolve) => { setTimeout(resolve, 35); });
 
     expect(rejection).toBeInstanceOf(Error);
     expect(activeAtRejection).toBe(0);
@@ -1299,7 +1299,7 @@ describe("TestSemanticAuditProvider", () => {
       );
       activeRetries += 1;
       peakRetries = Math.max(peakRetries, activeRetries);
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => { setTimeout(resolve, 10); });
       activeRetries -= 1;
       return completion({ audits: keys.map((key) => item(key)) });
     });

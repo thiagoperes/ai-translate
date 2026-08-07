@@ -448,22 +448,22 @@ describe("sharded json state store", () => {
         if (betaRenameCount === 1) {
           markDelayedBetaStarted();
           await delayedBetaRelease;
-          const result = await originalRename(from, to);
+          await originalRename(from, to);
           markDelayedBetaRenamed();
-          return result;
+          return;
         }
 
-        const result = await originalRename(from, to);
+        await originalRename(from, to);
         releaseDelayedBeta();
         await delayedBetaRenamed;
-        return result;
+        return;
       }
       if (destination === failingPath && failNextAlpha) {
         failNextAlpha = false;
         await delayedBetaStarted;
         throw new Error("forced alpha shard promotion failure");
       }
-      return await originalRename(from, to);
+      await originalRename(from, to);
     });
 
     try {
@@ -852,7 +852,7 @@ describe("sharded json state store", () => {
     const events: string[] = [];
     const operationOne = store.withLock(async () => {
       events.push("a-start");
-      await new Promise((resolve) => setTimeout(resolve, 30));
+      await new Promise((resolve) => { setTimeout(resolve, 30); });
       events.push("a-end");
     });
     const operationTwo = store.withLock(async () => {

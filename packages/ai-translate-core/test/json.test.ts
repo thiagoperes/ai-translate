@@ -99,18 +99,18 @@ describe("json helpers", () => {
       ],
     });
 
-    expect(() => setJsonValueAtAddress(root, [], "bad")).toThrow(
+    expect(() => { setJsonValueAtAddress(root, [], "bad"); }).toThrow(
       "Cannot replace the document root by address.",
     );
-    expect(() =>
-      setJsonValueAtAddress(root, [{ id: "node.1", kind: "node" }], "bad"),
-    ).toThrow("Node segments are not supported for JSON values.");
-    expect(() =>
-      setJsonValueAtAddress([], [{ key: "name", kind: "key" }], "bad"),
-    ).toThrow("Expected an object at the final JSON address segment.");
-    expect(() =>
-      setJsonValueAtAddress({}, [{ index: 0, kind: "index" }], "bad"),
-    ).toThrow("Expected an array at the final JSON address segment.");
+    expect(() => {
+      setJsonValueAtAddress(root, [{ id: "node.1", kind: "node" }], "bad");
+    }).toThrow("Node segments are not supported for JSON values.");
+    expect(() => {
+      setJsonValueAtAddress([], [{ key: "name", kind: "key" }], "bad");
+    }).toThrow("Expected an object at the final JSON address segment.");
+    expect(() => {
+      setJsonValueAtAddress({}, [{ index: 0, kind: "index" }], "bad");
+    }).toThrow("Expected an array at the final JSON address segment.");
   });
 
   it("visits JSON leaves with stable addresses", () => {

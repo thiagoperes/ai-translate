@@ -31,7 +31,7 @@ export function isLocaleTag(name: string): boolean {
   }
 
   const [primary = ""] = name.split("-");
-  if (!/^[A-Za-z]{2,3}$/.test(primary)) {
+  if (!/^[A-Za-z]{2,3}$/u.test(primary)) {
     return false;
   }
 

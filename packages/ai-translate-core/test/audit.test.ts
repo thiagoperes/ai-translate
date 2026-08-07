@@ -402,7 +402,7 @@ describe("auditCatalogs", () => {
           inFlightLocales.add(request.locale);
           maxConcurrentLocaleGroups = Math.max(maxConcurrentLocaleGroups, inFlightLocales.size);
         }
-        await new Promise((resolve) => setTimeout(resolve, request.locale === "de" ? 30 : 5));
+        await new Promise((resolve) => { setTimeout(resolve, request.locale === "de" ? 30 : 5); });
         try {
           return await base.audit(request);
         } finally {
@@ -452,7 +452,7 @@ describe("auditCatalogs", () => {
         activeCalls += 1;
         try {
           const delay = request.locale === "de" ? (request.pass === "adversarial" ? 1 : 5) : 30;
-          await new Promise((resolve) => setTimeout(resolve, delay));
+          await new Promise((resolve) => { setTimeout(resolve, delay); });
           if (request.locale === "de" && request.pass === "adversarial") {
             throw new Error("audit provider unavailable");
           }
@@ -945,7 +945,7 @@ describe("auditCatalogs", () => {
       },
     };
     const state = {
-      snapshot: { entries: {}, version: 2 } as SyncStateSnapshot,
+      snapshot: { entries: {}, version: 2 },
       load() {
         return Promise.resolve(structuredClone(this.snapshot));
       },

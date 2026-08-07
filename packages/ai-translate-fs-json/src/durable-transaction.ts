@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
-import type { SyncStateSnapshot } from "@ai-translate/core/types";
+import type { SyncStateLoadScope, SyncStateSnapshot } from "@ai-translate/core/types";
 
 export const DURABLE_TRANSACTION_STATE_STORE: unique symbol = Symbol.for(
   "@ai-translate/fs-json/durable-transaction-state-store",
@@ -25,6 +25,12 @@ export interface DurableTransactionCommit {
   documents: readonly DurableDocumentChange[];
   initialState: SyncStateSnapshot;
   nextState: SyncStateSnapshot;
+  /**
+   * Restricts both the commit and any later recovery to these locales. Without
+   * it the staged snapshot is read as the whole corpus, which for a scoped run
+   * would delete every locale it never loaded.
+   */
+  scope?: SyncStateLoadScope;
 }
 
 export interface DurableTransactionStateStore {
@@ -36,7 +42,7 @@ export interface DurableTransactionStateStore {
 interface DurableTransactionCoordinatorOptions {
   faultInjector?: (point: DurableTransactionFaultPoint) => Promise<"simulate-crash" | void> | "simulate-crash" | void;
   journalPath: string;
-  saveState(state: SyncStateSnapshot): Promise<void>;
+  saveState(state: SyncStateSnapshot, scope?: SyncStateLoadScope): Promise<void>;
   transactionsDir: string;
 }
 
@@ -53,8 +59,26 @@ interface TransactionJournalV1 {
   initialState: string;
   nextState: string;
   phase: "rollback" | "rollforward";
+  scope?: undefined;
   version: 1;
 }
+
+/**
+ * Identical to v1 plus the scope the transaction was staged under.
+ *
+ * The version is raised only when a scope is actually present, so unscoped
+ * transactions stay readable by any version in both directions. The bump
+ * matters because recovery usually runs in a later process: a reader that does
+ * not understand the scope would restore the snapshot as the whole corpus and
+ * delete every locale the run never loaded. Rejecting the journal as unreadable
+ * is a loud, recoverable failure; applying it is silent data loss.
+ */
+interface TransactionJournalV2 extends Omit<TransactionJournalV1, "scope" | "version"> {
+  scope: { locales: readonly string[] };
+  version: 2;
+}
+
+type TransactionJournal = TransactionJournalV1 | TransactionJournalV2;
 
 class SimulatedProcessCrash extends Error {
   constructor(point: DurableTransactionFaultPoint) {
@@ -71,18 +95,29 @@ function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
 }
 
-function parseJournal(value: unknown, journalPath: string): TransactionJournalV1 {
+function parseJournalScope(value: unknown): { locales: readonly string[] } | null {
+  if (!isRecord(value) || !Array.isArray(value.locales) || value.locales.length === 0) {
+    return null;
+  }
+  return value.locales.every((locale) => typeof locale === "string" && locale.length > 0)
+    ? { locales: value.locales as readonly string[] }
+    : null;
+}
+
+function parseJournal(value: unknown, journalPath: string): TransactionJournal {
   if (!isRecord(value)) {
     throw new Error(`Invalid ai-translate transaction journal at ${journalPath}.`);
   }
-  const documents = value.documents;
+  // Bound to locals so the narrowing below survives the document callback, which
+  // would otherwise invalidate it for properties read off a mutable record.
+  const { documents, id, initialState, nextState, phase, version } = value;
   if (
-    value.version !== 1 ||
-    typeof value.id !== "string" ||
-    !/^[0-9a-f-]{36}$/u.test(value.id) ||
-    (value.phase !== "rollback" && value.phase !== "rollforward") ||
-    typeof value.initialState !== "string" ||
-    typeof value.nextState !== "string" ||
+    (version !== 1 && version !== 2) ||
+    typeof id !== "string" ||
+    !/^[0-9a-f-]{36}$/u.test(id) ||
+    (phase !== "rollback" && phase !== "rollforward") ||
+    typeof initialState !== "string" ||
+    typeof nextState !== "string" ||
     !Array.isArray(documents)
   ) {
     throw new Error(`Invalid ai-translate transaction journal at ${journalPath}.`);
@@ -108,14 +143,25 @@ function parseJournal(value: unknown, journalPath: string): TransactionJournalV1
     };
   });
 
-  return {
+  const common: Omit<TransactionJournalV1, "scope" | "version"> = {
     documents: parsedDocuments,
-    id: value.id,
-    initialState: value.initialState,
-    nextState: value.nextState,
-    phase: value.phase,
-    version: 1,
+    id,
+    initialState,
+    nextState,
+    phase,
   };
+
+  if (version === 1) {
+    return { ...common, version: 1 };
+  }
+
+  const scope = parseJournalScope(value.scope);
+  if (scope === null) {
+    // A v2 journal without a usable scope cannot be recovered safely: applying
+    // its snapshot unscoped is exactly the deletion the version guards against.
+    throw new Error(`Invalid ai-translate transaction journal at ${journalPath}.`);
+  }
+  return { ...common, scope, version: 2 };
 }
 
 function parseState(contents: Uint8Array, stateArtifactPath: string): SyncStateSnapshot {
@@ -190,7 +236,7 @@ async function readFileRequired(filePath: string): Promise<Buffer> {
   }
 }
 
-async function readJournal(journalPath: string): Promise<TransactionJournalV1 | null> {
+async function readJournal(journalPath: string): Promise<TransactionJournal | null> {
   try {
     return parseJournal(JSON.parse(await fs.readFile(journalPath, "utf8")), journalPath);
   } catch (error) {
@@ -261,7 +307,10 @@ export function createDurableTransactionCoordinator(
     }
     const stateRelativePath = useNext ? journal.nextState : journal.initialState;
     const statePath = artifactPath(options.transactionsDir, journal, stateRelativePath);
-    await options.saveState(parseState(await readFileRequired(statePath), statePath));
+    await options.saveState(
+      parseState(await readFileRequired(statePath), statePath),
+      journal.scope,
+    );
     await cleanupTransaction(options.journalPath, options.transactionsDir, journal);
   }
 
@@ -316,14 +365,19 @@ export function createDurableTransactionCoordinator(
         Buffer.from(`${JSON.stringify(transaction.nextState)}\n`),
       );
 
-      const journal: TransactionJournalV1 = {
-        documents,
-        id,
-        initialState,
-        nextState,
-        phase: "rollback",
-        version: 1,
-      };
+      const scopeLocales = transaction.scope?.locales;
+      const journal: TransactionJournal =
+        scopeLocales === undefined || scopeLocales.length === 0
+          ? { documents, id, initialState, nextState, phase: "rollback", version: 1 }
+          : {
+              documents,
+              id,
+              initialState,
+              nextState,
+              phase: "rollback",
+              scope: { locales: [...scopeLocales] },
+              version: 2,
+            };
       await writeFileDurable(
         options.journalPath,
         Buffer.from(`${JSON.stringify(journal, null, 2)}\n`),
@@ -341,10 +395,10 @@ export function createDurableTransactionCoordinator(
           );
           await injectFault("after-document-write");
         }
-        await options.saveState(transaction.nextState);
+        await options.saveState(transaction.nextState, journal.scope);
         await injectFault("after-state-write");
 
-        const committedJournal: TransactionJournalV1 = { ...journal, phase: "rollforward" };
+        const committedJournal: TransactionJournal = { ...journal, phase: "rollforward" };
         await writeFileDurable(
           options.journalPath,
           Buffer.from(`${JSON.stringify(committedJournal, null, 2)}\n`),

@@ -621,6 +621,94 @@ describe("syncCatalogs", () => {
     expect(state.snapshot.entries[stateKey]?.validationAudits).toBeUndefined();
   });
 
+  it.each([
+    {
+      expectedReasonNote: 'Untrusted diagnostic reason: "Target says a deposit is required.". ',
+      label: "a diagnostic reason",
+      reason: "Target says a deposit is required.",
+    },
+    { expectedReasonNote: "", label: "no diagnostic reason", reason: undefined },
+  ])(
+    "spells out the failed requirement in the repair note with $label",
+    async ({ expectedReasonNote, reason }) => {
+      const catalog = createMemoryCatalog();
+      const state = createStateStore();
+      const sourceText = "No refundable deposit";
+      const targetText = "Eine Kaution ist erforderlich";
+      const sourceRef: DocumentRef = {
+        catalogId: "memory",
+        format: "json",
+        locale: "en",
+        path: "/memory/en/common.json",
+        unitId: "common",
+      };
+      const entry = (value: string): Entry => ({
+        address: [{ key: "claim", kind: "key" }],
+        policy: "translate",
+        storage: "string",
+        value,
+      });
+      catalog.documents.set("en:common", {
+        entries: [entry(sourceText)],
+        ref: sourceRef,
+        state: { locale: "en", unitId: "common" },
+      });
+      catalog.documents.set("de:common", {
+        entries: [entry(targetText)],
+        ref: { ...sourceRef, locale: "de", path: "/memory/de/common.json" },
+        state: { locale: "de", unitId: "common" },
+      });
+      state.snapshot.entries[makeStateKey("de", "memory", "common", "/claim")] = {
+        catalogId: "memory",
+        jsonPointer: "/claim",
+        locale: "de",
+        origin: "generated",
+        sourceDigest: digestValue(sourceText),
+        status: "synced",
+        targetDigest: digestValue(targetText),
+        unitId: "common",
+        updatedAt: "2026-07-21T00:00:00.000Z",
+        validationAudits: {
+          claims: {
+            auditedAt: "2026-07-21T00:00:00.000Z",
+            auditRevision: "v1",
+            deterministicEvaluations: [
+              {
+                ...(reason === undefined ? {} : { reason }),
+                requirementId: "no-deposit",
+                verdict: "contradicted",
+              },
+            ],
+            inputDigest: "unsafe",
+            providerRevision: "v1",
+            schemaVersion: 1,
+            status: "retranslate",
+          },
+        },
+      };
+      const translate = vi.fn<TranslationProvider["translate"]>(({ requests }) =>
+        Promise.resolve(requests.map(({ key }) => ({ key, translation: "Keine Kaution" }))),
+      );
+
+      await syncCatalogs({
+        catalogs: [catalog],
+        provider: { translate },
+        sourceLocale: "en",
+        state,
+        targetLocales: ["de"],
+      });
+
+      // Pinned in full because the three parts are assembled by concatenation,
+      // where a precedence slip silently drops two of them and still yields a
+      // plausible-looking string.
+      expect(translate.mock.calls[0]?.[0].requests[0]?.context?.constraints?.[0]?.note).toBe(
+        'Semantic audit "claims" found requirement "no-deposit" was contradicted. ' +
+          `${expectedReasonNote}Preserve the English meaning, polarity, scope, attribution, ` +
+          "and qualifiers in a materially corrected translation.",
+      );
+    },
+  );
+
   it("fails an audit repair when every candidate repeats the rejected target", async () => {
     const catalog = createMemoryCatalog();
     const state = createStateStore();
@@ -2184,10 +2272,11 @@ describe("syncCatalogs", () => {
     });
 
     expect(calls).toHaveLength(2);
-    expect(calls.map((call) => call.batchKey).toSorted()).toEqual([
-      "de::memory::first",
-      "de::memory::second",
-    ]);
+    expect(
+      calls
+        .map((call) => call.batchKey)
+        .toSorted((left, right) => String(left).localeCompare(String(right))),
+    ).toEqual(["de::memory::first", "de::memory::second"]);
     expect(calls.every((call) => call.keys.includes("/title"))).toBe(true);
     expect(
       calls.find((call) => call.batchKey?.endsWith("::first"))?.contexts
@@ -2262,11 +2351,11 @@ describe("syncCatalogs", () => {
     const overlapped = await Promise.race([
       bothStarted.then(() => true),
       new Promise<false>((resolve) => {
-        setTimeout(() => resolve(false), 2_000);
+        setTimeout(() => { resolve(false); }, 2_000);
       }),
     ]);
     released = true;
-    releases.forEach((release) => release());
+    releases.forEach((release) => { release(); });
     const result = await pendingSync;
 
     expect(overlapped).toBe(true);
@@ -3417,7 +3506,7 @@ describe("translation guardrails", () => {
     expect(validator).toHaveBeenCalled();
 
     const target = catalog.documents.get("fr:common");
-    if (target === undefined || target.entries[0] === undefined) {
+    if (target?.entries[0] === undefined) {
       throw new Error("Missing accepted-provenance fast-path target fixture.");
     }
     target.entries[0].value = "Texte modifié";

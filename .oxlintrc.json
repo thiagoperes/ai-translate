@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["typescript", "unicorn", "import", "vitest"],
+  "plugins": ["typescript", "unicorn", "import", "vitest", "promise", "node"],
   "env": {
     "node": true,
     "es2024": true
@@ -20,22 +20,88 @@
     "vitest/require-to-throw-message": "off",
     "unicorn/consistent-function-scoping": "off",
 
+    "no-promise-executor-return": "error",
+    "no-throw-literal": "error",
+    "require-unicode-regexp": "error",
+
+    // Off: a `var`-era rule. Every closure it flags here captures a
+    // per-iteration `const`/`let` binding or is invoked synchronously before
+    // the loop advances, so it reports only safe modern code, and the
+    // workarounds it pushes toward are worse than what they replace.
+    "no-loop-func": "off",
+
+    // Off: it costs type safety here. The hazard it targets -- extra iterator
+    // arguments reaching a variadic callback, as in `map(parseInt)` -- does not
+    // arise at these call sites, which pass single-parameter functions whose
+    // signatures TypeScript already checks. Several are type guards, and
+    // wrapping `filter(isFoo)` in an arrow silently discards the type predicate
+    // and with it the narrowing.
+    "unicorn/no-array-callback-reference": "off",
+
     "typescript/consistent-type-definitions": ["error", "interface"],
     "typescript/consistent-type-imports": [
       "error",
       { "prefer": "type-imports", "fixStyle": "inline-type-imports" }
     ],
     "typescript/no-explicit-any": "error",
-    "typescript/no-confusing-void-expression": "error",
-    "typescript/no-floating-promises": "error",
-    "typescript/no-misused-promises": "error",
     "typescript/no-non-null-assertion": "error",
-    "typescript/require-await": "error",
     "typescript/no-unused-vars": [
       "error",
       { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }
     ],
-    "typescript/prefer-optional-chain": "error"
+    "typescript/prefer-optional-chain": "error",
+
+    "typescript/await-thenable": "error",
+    "typescript/consistent-type-exports": "error",
+    "typescript/no-array-delete": "error",
+    "typescript/no-base-to-string": "error",
+    "typescript/no-confusing-void-expression": "error",
+    "typescript/no-duplicate-type-constituents": "error",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-for-in-array": "error",
+    "typescript/no-implied-eval": "error",
+    "typescript/no-meaningless-void-operator": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/no-misused-spread": "error",
+    "typescript/no-redundant-type-constituents": "error",
+    "typescript/no-unnecessary-boolean-literal-compare": "error",
+    "typescript/no-unnecessary-template-expression": "error",
+    "typescript/no-unnecessary-type-arguments": "error",
+    "typescript/no-unnecessary-type-assertion": "error",
+    "typescript/no-unnecessary-type-parameters": "error",
+    "typescript/prefer-readonly": "error",
+    "typescript/prefer-reduce-type-parameter": "error",
+    "typescript/require-array-sort-compare": "error",
+    "typescript/require-await": "error",
+    "typescript/restrict-plus-operands": "error",
+    "typescript/restrict-template-expressions": "error",
+    "typescript/return-await": "error",
+    // A `default` counts as exhaustive. The bug this catches is a switch that
+    // silently falls through a case nobody handled; where a default is present
+    // the fallthrough is a decision, and demanding every member be spelled out
+    // makes switches over a dependency's enum break on its every addition.
+    "typescript/switch-exhaustiveness-check": [
+      "error",
+      { "considerDefaultExhaustiveForUnions": true }
+    ],
+    "typescript/unbound-method": "error",
+    "typescript/use-unknown-in-catch-callback-variable": "error",
+
+    // Off: its two biggest sources here are conditions the type system cannot
+    // judge. Concurrency state (`failed` in the bounded-parallel workers) is
+    // mutated by sibling tasks across an await, which the checker reads as
+    // always-false, so obeying it would delete the error propagation. The rest
+    // are runtime guards at trust boundaries where the static type is an
+    // unverified claim -- JSON parsed off disk, user-supplied validators,
+    // externally provided stores -- and dropping those turns a corrupt state
+    // file into a crash. Revisit once those boundaries are typed `unknown`.
+    "typescript/no-unnecessary-condition": "off",
+
+    // Off: the assertions it flags are the correct idiom at the dynamic
+    // boundaries this toolkit is made of -- narrowing `unknown` after a runtime
+    // check, or walking a JSON tree. Enabling it buys type-guard ceremony or a
+    // sea of suppressions across 331 sites, not safety.
+    "typescript/no-unsafe-type-assertion": "off"
   },
   "overrides": [
     {
@@ -48,6 +114,18 @@
       "files": ["bench/**/*.mjs"],
       "rules": {
         "no-console": "off"
+      }
+    },
+    {
+      // Both rules are about production hazards that do not exist in a test.
+      // `async` on a mock with nothing to await is how you satisfy a promise
+      // returning interface, and a method pulled off an object to be passed to
+      // `expect` or a spy is never going to be called through a lost receiver.
+      // Both stay on for `src`, which is where they pay.
+      "files": ["**/test/**/*.ts", "**/*.test.ts"],
+      "rules": {
+        "typescript/require-await": "off",
+        "typescript/unbound-method": "off"
       }
     }
   ],

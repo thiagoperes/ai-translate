@@ -1233,7 +1233,7 @@ async function writeShardFiles(
 }
 
 async function syncDirectoryTree(root: string): Promise<void> {
-  let entries: Dirent<string>[];
+  let entries: Dirent[];
   try {
     entries = await fs.readdir(root, { encoding: "utf8", withFileTypes: true });
   } catch (error) {
@@ -1420,7 +1420,7 @@ export function createShardedJsonStateStore(
       ? {}
       : { faultInjector: options.transactionFaultInjector }),
     journalPath,
-    saveState: (state) => writeShardFiles(shardsDir, state),
+    saveState: (state, scope) => writeShardFiles(shardsDir, state, scope),
     transactionsDir,
   });
 
@@ -1435,7 +1435,7 @@ export function createShardedJsonStateStore(
         return projectSnapshotLocales(migrated, scope);
       }
 
-      return await loadFromShards(shardsDir, scope);
+      return  loadFromShards(shardsDir, scope);
     },
     async save(state, scope) {
       await writeShardFiles(shardsDir, state, scope);
@@ -1484,7 +1484,7 @@ export function createShardedJsonStateStore(
             });
           }
 
-          await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+          await new Promise((resolve) => { setTimeout(resolve, retryDelayMs); });
         }
       }
 

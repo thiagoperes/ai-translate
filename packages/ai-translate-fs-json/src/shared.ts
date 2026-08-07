@@ -102,8 +102,12 @@ export function buildEntriesFromJson(
   root: JsonValue,
   options: JsonEntryOptions = {},
 ): Entry[] {
-  const tokenize = options.messageFormat?.tokenize ?? tokenizeText;
-  const messageFormatId = options.messageFormat?.id;
+  // Bound to its format: the message format is caller-supplied and may be a
+  // class instance, which would lose `this` once `tokenize` is detached.
+  const { messageFormat } = options;
+  const tokenize =
+    messageFormat === undefined ? tokenizeText : (text: string) => messageFormat.tokenize(text);
+  const messageFormatId = messageFormat?.id;
   const structureGroups =
     options.plurals === undefined
       ? undefined

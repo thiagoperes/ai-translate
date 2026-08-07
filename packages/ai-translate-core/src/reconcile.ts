@@ -113,8 +113,8 @@ export function rebaseIndexedEntries(args: {
     group[side].push({ entry, ...(history === undefined ? {} : { history }), pointer });
     groups.set(signature, group);
   };
-  args.sourceEntries.forEach((entry) => addNode(entry, "current"));
-  args.targetEntries.forEach((entry) => addNode(entry, "previous"));
+  args.sourceEntries.forEach((entry) => { addNode(entry, "current"); });
+  args.targetEntries.forEach((entry) => { addNode(entry, "previous"); });
 
   const previousPointers: Record<string, string> = {};
   const retainedStateKeys = new Set<string>();

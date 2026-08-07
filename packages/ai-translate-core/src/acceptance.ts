@@ -486,8 +486,7 @@ function isCompletePreservedEvaluation(
   evaluation: SemanticAuditEvaluation | undefined
 ): evaluation is SemanticAuditEvaluation {
   return (
-    evaluation !== undefined &&
-    evaluation.verdict === "preserved" &&
+    evaluation?.verdict === "preserved" &&
     evaluation.confidence === "high" &&
     isCompleteEvidence(evaluation)
   );
@@ -497,8 +496,7 @@ function isCompleteSinglePassPreservedEvaluation(
   evaluation: SemanticAuditEvaluation | undefined
 ): evaluation is SemanticAuditEvaluation {
   return (
-    evaluation !== undefined &&
-    evaluation.verdict === "preserved" &&
+    evaluation?.verdict === "preserved" &&
     (evaluation.confidence === "high" || evaluation.confidence === "medium") &&
     isCompleteEvidence(evaluation)
   );
