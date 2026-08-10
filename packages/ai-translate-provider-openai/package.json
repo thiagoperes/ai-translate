@@ -53,7 +53,7 @@
   "dependencies": {
     "@ai-translate/core": "workspace:*",
     "@ai-translate/provider-core": "workspace:*",
-    "openai": "7.1.0",
+    "openai": "7.4.0",
     "zod": "4.4.3"
   },
   "engines": {
