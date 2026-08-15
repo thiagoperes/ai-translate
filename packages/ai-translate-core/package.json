@@ -50,6 +50,11 @@
       "import": "./dist/audit.mjs",
       "default": "./dist/audit.mjs"
     },
+    "./candidate-cache": {
+      "types": "./dist/candidate-cache.d.mts",
+      "import": "./dist/candidate-cache.mjs",
+      "default": "./dist/candidate-cache.mjs"
+    },
     "./constraints": {
       "types": "./dist/constraints.d.mts",
       "import": "./dist/constraints.mjs",

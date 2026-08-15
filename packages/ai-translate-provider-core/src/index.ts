@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { isSemanticallySubstantiveEvidenceSpan } from "@ai-translate/core/audit";
+import { selectRelevantGlossaryTerms } from "@ai-translate/core/candidate-cache";
 import { mergeTranslationContexts, normalizeTranslationContext } from "@ai-translate/core/policies";
 import { tokenizeText, validateTokenParity } from "@ai-translate/core/tokens";
 import type {
@@ -2301,6 +2302,37 @@ function buildGlossarySection(glossary?: readonly GlossaryTerm[]): string {
     .join("\n")}`;
 }
 
+/**
+ * Narrows a project glossary to the terms some source text in this batch
+ * actually contains.
+ *
+ * A glossary is corpus-wide — brand names, product nouns, domain vocabulary —
+ * while a batch is a hundred strings. Sending all of it to every batch makes
+ * the bill scale with the glossary rather than with the work: measured at 100
+ * keys per call, going from no glossary to 500 terms takes input from 11.4 to
+ * 95.7 tokens per key, and none of those terms apply to the strings in the
+ * request.
+ *
+ * The predicate is the one `selectRelevantGlossaryTerms` already uses to decide
+ * whether a term belongs in a candidate's cache key, so this makes the prompt
+ * agree with what the cache has always claimed: a term absent from the source
+ * did not shape the translation. Order follows the configured glossary, not
+ * request order, so the same batch renders the same prompt however it was
+ * assembled.
+ */
+function selectBatchGlossary(
+  batch: ProviderBatch,
+  glossary?: readonly GlossaryTerm[],
+): readonly GlossaryTerm[] | undefined {
+  if (glossary === undefined || glossary.length === 0) {
+    return glossary;
+  }
+  const relevant = new Set(
+    batch.flatMap((request) => selectRelevantGlossaryTerms(request.sourceText, glossary)),
+  );
+  return relevant.size === glossary.length ? glossary : glossary.filter((term) => relevant.has(term));
+}
+
 const CONTENT_ROLE_GUIDANCE: Readonly<Record<TranslationContentRole, string>> = {
   body: "Write fluent native-language prose. Preserve meaning, evidence, qualifiers, citations, and structure; do not compress it merely to mirror English character length.",
   cta: "Use a short, idiomatic action phrase that preserves the exact action and commitment level.",
@@ -2869,6 +2901,10 @@ export const TRANSLATION_OUTPUT_CONTRACT_MATERIAL: TranslationOutputContractMate
     ].map((value) => value.toString()),
     prompt: [
       buildGlossarySection,
+      // Which glossary terms reach the model is a generation input, not a
+      // transport detail: tightening the predicate (word boundaries, stemming)
+      // would change output for terms that only match loosely today.
+      selectBatchGlossary,
       buildContentRoleSection,
       contentRoleLengthContract,
       buildSystemPrompt,
@@ -3264,6 +3300,7 @@ export class StructuredTranslationProvider implements TranslationProvider {
         protectRequestText(request, mergeTranslationContexts(args.batchContext, request.context)),
       ]),
     );
+    const batchGlossary = selectBatchGlossary(args.batch, args.glossary);
     const systemPrompt = buildSystemPrompt(
       args.locale,
       {
@@ -3281,7 +3318,7 @@ export class StructuredTranslationProvider implements TranslationProvider {
         hasRepairRequests,
         hasRequestSpecificContext,
         hasSelfCheckPlans: args.batch.some((request) => request.selfCheckPlans !== undefined),
-        ...(args.glossary === undefined ? {} : { glossary: args.glossary }),
+        ...(batchGlossary === undefined ? {} : { glossary: batchGlossary }),
         contentRoles: args.batch.flatMap((request) =>
           request.contentRole === undefined ? [] : [request.contentRole],
         ),

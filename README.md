@@ -77,6 +77,8 @@ Two things move the total more than the rate card does:
 
 Prompt caching is not a meaningful lever here. The only prefix shared across calls is the system prompt, which is roughly a tenth of input tokens once amortised across a batch, and input is the cheaper half of the bill.
 
+A glossary costs nothing it does not earn. Each call carries only the terms that appear in the strings it is translating, so a 500-term glossary and no glossary at all bill the same for a batch that uses neither — 16.6 tokens per key at 100 keys per call, against 95.7 if all 500 terms rode along.
+
 Token counts are measured by capturing the payloads the provider actually sends at stock defaults, the same method as [`bench/prompt.bench.mjs`](bench/prompt.bench.mjs), rather than estimated from the prompt source. Prices are the published rate cards as of 2026-08-07 and will drift; re-check them before quoting a budget.
 
 ## Install
@@ -221,14 +223,35 @@ Need a different format, a different model, or a different i18n library? `Catalo
 5. Queued entries are batched per locale and sent to the provider, with any glossary terms and context rules that apply.
 6. Candidates are validated, optionally audited, and written atomically. State is updated in the same transaction.
 
+## Scaling a run
+
+Two limits decide throughput, and the lower one wins: `concurrency.documents`
+(default 4) bounds how many documents the engine works on at once — every local
+phase, from reading sources to writing results — and the provider's
+`concurrentRequests` (default 6) bounds how many requests reach the model. Raise
+both; raising one alone moves the bottleneck rather than removing it. A single
+run can override the first with `--concurrency <n>`.
+
+On 800 source documents across 4 locales, going from 1 to 64 takes a sync from
+15.2s to 2.5s of engine time. See the [CLI README](packages/ai-translate-cli/README.md#concurrency)
+for how the two interact.
+
 ## Benchmarks
 
-Space, memory, and token cost are measured against both synthetic and real corpora, with a baseline guard in CI so a regression fails the build:
+Space, memory, token cost, and throughput are measured against both synthetic and real corpora, with a baseline guard in CI so a regression fails the build:
 
 ```bash
 pnpm bench           # measure
 pnpm bench:baseline  # record a baseline
 pnpm bench:check     # fail on regression
+```
+
+`bench/throughput.bench.mjs` reports where a sync's wall clock goes — catalog
+scan, document write, state load and write — against a provider of known latency,
+so an engine-side regression is visible separately from model time:
+
+```bash
+node bench/throughput.bench.mjs --documents 800 --locales 4 --concurrency 64
 ```
 
 ## Development

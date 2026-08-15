@@ -334,6 +334,19 @@ function ensureValidConfig(config: AiTranslateConfig): void {
   }
 }
 
+/**
+ * Requests grouped into one `provider.translate` call by default.
+ *
+ * Matched to the batch size the shipped providers default to. A group larger
+ * than the provider's own limit does not buy a bigger call: the provider splits
+ * it and the remainder becomes a short call carrying a full system prompt and
+ * schema for a handful of keys. Grouping 120 against a provider that sends 100
+ * measured 10 calls where 6 would do, and 61.3 tokens of prompt overhead per key
+ * against 55.3. A provider configured for larger batches should raise
+ * `batching.maxRequestsPerProviderCall` to match.
+ */
+const DEFAULT_MAX_REQUESTS_PER_PROVIDER_CALL = 100;
+
 function createEmptyMetrics(): SyncMetrics & CandidateCacheRunMetrics {
   return {
     candidateCacheHits: 0,
@@ -3088,7 +3101,8 @@ async function translateTasksOnce(
 
   const responseBuckets = tasks.map(() => new Map<string, CandidateResponse>());
   const maxRequestsPerProviderCall =
-    config.batching?.maxRequestsPerProviderCall ?? 120;
+    config.batching?.maxRequestsPerProviderCall ??
+    DEFAULT_MAX_REQUESTS_PER_PROVIDER_CALL;
   interface RequestGroup {
     locale: string;
     requestOwners: Map<

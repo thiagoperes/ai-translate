@@ -766,8 +766,13 @@ export interface AiTranslateConfig {
   batching?: {
     /**
      * Maximum logical requests sent through one provider call for locale
-     * batching. Providers may apply a smaller character-bounded split while
+     * batching. Defaults to 100, matching the batch size the shipped providers
+     * default to; providers may apply a smaller character-bounded split while
      * preserving every request's own context.
+     *
+     * Setting this above the provider's own batch size does not produce larger
+     * calls — the provider splits the group and the remainder becomes a short
+     * call paying a full system prompt for a few keys. Raise both together.
      */
     maxRequestsPerProviderCall?: number;
     scope?: "document" | "locale";

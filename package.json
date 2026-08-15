@@ -21,7 +21,7 @@
     "coverage": "pnpm -r --parallel --filter './packages/*' coverage",
     "coverage:strict": "pnpm -r --parallel --filter './packages/*' coverage:strict",
     "test:pack": "pnpm -r --filter './packages/*' test:pack && node ./scripts/package-smoke.mjs",
-    "bench": "pnpm run build && node --expose-gc ./bench/state.bench.mjs --scale 0.25 && node --expose-gc ./bench/transaction.bench.mjs --scale 0.25 && node ./bench/prompt.bench.mjs",
+    "bench": "pnpm run build && node --expose-gc ./bench/state.bench.mjs --scale 0.25 && node --expose-gc ./bench/transaction.bench.mjs --scale 0.25 && node ./bench/prompt.bench.mjs && node ./bench/throughput.bench.mjs --documents 200 --locales 4 --latency 5",
     "bench:baseline": "pnpm run build && node --expose-gc ./bench/state.bench.mjs --scale 0.25 --json > ./bench/baseline.json",
     "bench:check": "pnpm run build && node --expose-gc ./bench/state.bench.mjs --scale 0.25 --baseline ./bench/baseline.json",
     "validate": "pnpm run lint && pnpm run typecheck && pnpm run build && pnpm run test && pnpm run test:pack",

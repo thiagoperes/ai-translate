@@ -8,6 +8,7 @@ export default defineConfig({
     "src/address.ts",
     "src/acceptance.ts",
     "src/audit.ts",
+    "src/candidate-cache.ts",
     "src/constraints.ts",
     "src/hash.ts",
     "src/json.ts",
