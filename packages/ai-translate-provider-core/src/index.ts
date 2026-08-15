@@ -1491,9 +1491,21 @@ async function runWithConcurrency<T, TResult>(
   return results;
 }
 
+/**
+ * Caps how many transport calls are in flight across every concurrent
+ * `translate` on one provider instance, so the ceiling is the provider's rate
+ * limit rather than however many batches the engine happened to dispatch.
+ *
+ * Waiters are dequeued through a moving cursor rather than `Array#shift`, which
+ * copies the remaining queue on every release: at a few waiters that is
+ * invisible, but a run configured for thousands of concurrent requests queues
+ * thousands, and paying a copy of the whole queue per completed call turns the
+ * limiter itself into the slow part.
+ */
 class RequestLimiter {
   private activeRequests = 0;
   private readonly pending: (() => void)[] = [];
+  private pendingCursor = 0;
 
   constructor(private readonly maximum: number) {}
 
@@ -1522,7 +1534,21 @@ class RequestLimiter {
 
   private release(): void {
     this.activeRequests -= 1;
-    this.pending.shift()?.();
+    const next = this.pending[this.pendingCursor];
+    if (next === undefined) {
+      this.pending.length = 0;
+      this.pendingCursor = 0;
+      return;
+    }
+
+    this.pendingCursor += 1;
+    // A queue that never fully drains would otherwise retain every waiter it
+    // has ever served, so drop the served prefix once it dominates the queue.
+    if (this.pendingCursor > 1024 && this.pendingCursor * 2 >= this.pending.length) {
+      this.pending.splice(0, this.pendingCursor);
+      this.pendingCursor = 0;
+    }
+    next();
   }
 }
 

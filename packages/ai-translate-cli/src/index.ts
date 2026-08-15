@@ -30,6 +30,7 @@ interface CommandOptions {
   auditCheck?: boolean;
   catalogIds?: string[];
   config?: string;
+  documentConcurrency?: number;
   dryRun?: boolean;
   force?: boolean;
   forceRetranslate?: boolean;
@@ -86,6 +87,14 @@ function requireNonNegativeIntegerOption(optionName: string, value: string | und
   const parsedValue = Number(rawValue);
   if (!Number.isSafeInteger(parsedValue) || parsedValue < 0) {
     throw new Error(`Option "--${optionName}" requires a non-negative integer.`);
+  }
+  return parsedValue;
+}
+
+function requirePositiveIntegerOption(optionName: string, value: string | undefined): number {
+  const parsedValue = requireNonNegativeIntegerOption(optionName, value);
+  if (parsedValue < 1) {
+    throw new Error(`Option "--${optionName}" requires a positive integer.`);
   }
   return parsedValue;
 }
@@ -305,6 +314,10 @@ function buildSyncOptions(options: CommandOptions): SyncCatalogsOptions {
     syncOptions.catalogIds = options.catalogIds;
   }
 
+  if (options.documentConcurrency !== undefined) {
+    syncOptions.documentConcurrency = options.documentConcurrency;
+  }
+
   if (options.dryRun !== undefined) {
     syncOptions.dryRun = options.dryRun;
   }
@@ -398,9 +411,9 @@ function printHelp(): void {
 Usage:
   ai-translate init [--integration <next-intl|i18next>] [--provider <openai|ai-sdk>] [--provider-package <@ai-sdk/...>] [--model <id>] [--preview] [--force]
   ai-translate validate [--config <path>]
-  ai-translate check [--config <path>] [--locale <locale>] [--catalog <id>] [--unit <id>] [--include-path <json-pointer>] [--max-pending-translations <count>]
-  ai-translate audit [--check] [--refresh] [--config <path>] [--locale <locale>] [--catalog <id>] [--unit <id>] [--include-path <json-pointer>]
-  ai-translate sync [--config <path>] [--dry-run] [--force-retranslate] [--force-retranslate-path <json-pointer>] [--include-path <json-pointer>] [--locale <locale>] [--catalog <id>] [--unit <id>] [--max-pending-translations <count>]
+  ai-translate check [--config <path>] [--locale <locale>] [--catalog <id>] [--unit <id>] [--include-path <json-pointer>] [--max-pending-translations <count>] [--concurrency <count>]
+  ai-translate audit [--check] [--refresh] [--config <path>] [--locale <locale>] [--catalog <id>] [--unit <id>] [--include-path <json-pointer>] [--concurrency <count>]
+  ai-translate sync [--config <path>] [--dry-run] [--force-retranslate] [--force-retranslate-path <json-pointer>] [--include-path <json-pointer>] [--locale <locale>] [--catalog <id>] [--unit <id>] [--max-pending-translations <count>] [--concurrency <count>]
   ai-translate new-locale <locale> [--from <locale>] [--strategy <strategy>] [--config <path>]
   ai-translate scaffold-locale <locale> --from <locale> [--strategy <strategy>] [--config <path>]
   ai-translate adopt [--identical-to-source <adopt|skip>] [--dry-run] [--config <path>]
@@ -520,6 +533,12 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
           break;
         case "max-pending-translations":
           options.maxPendingTranslations = requireNonNegativeIntegerOption(flag, nextValue);
+          if (inlineValue === undefined) {
+            index += 1;
+          }
+          break;
+        case "concurrency":
+          options.documentConcurrency = requirePositiveIntegerOption(flag, nextValue);
           if (inlineValue === undefined) {
             index += 1;
           }

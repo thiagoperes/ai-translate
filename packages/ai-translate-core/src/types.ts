@@ -787,6 +787,16 @@ export interface AiTranslateConfig {
    */
   compatibleGenerationRevisions?: readonly string[];
   concurrency?: {
+    /**
+     * Documents worked on at once across every phase of a run: loading sources,
+     * reconciling targets, preparing entries, dispatching provider batches, and
+     * writing results. Defaults to 4.
+     *
+     * This bounds the engine, not the network. How many requests reach the model
+     * at once is the provider's `concurrentRequests`, and the lower of the two
+     * wins — raising this alone will not push more work through a provider still
+     * capped at its own default.
+     */
     documents?: number;
   };
   contentRole?: TranslationContentRoleResolver;
@@ -880,6 +890,8 @@ export interface SyncCatalogsOptions {
   /** Internal: the caller holds the state store's exclusive snapshot lock. */
   assumeStateLock?: boolean;
   catalogIds?: readonly string[];
+  /** Overrides `concurrency.documents` for this run. */
+  documentConcurrency?: number;
   dryRun?: boolean;
   forceRetranslate?: boolean;
   forceRetranslatePaths?: readonly string[];
@@ -914,6 +926,8 @@ export interface DocumentSyncResult {
 export interface SyncPhaseTimings {
   cacheLookupMs: number;
   catalogScanMs: number;
+  /** Writing translated documents back, including the read-back that follows. */
+  documentWriteMs: number;
   providerMs: number;
   stateLoadMs: number;
   stateWriteMs: number;

@@ -30,6 +30,7 @@ import {
   createTranslationCandidateCacheKey,
   selectRelevantGlossaryTerms,
 } from "./candidate-cache";
+import { resolveDocumentConcurrency, runWithConcurrency } from "./concurrency";
 import { digestValue } from "./hash";
 import { mapEntriesByPointer } from "./json";
 import {
@@ -347,6 +348,7 @@ function createEmptyMetrics(): SyncMetrics & CandidateCacheRunMetrics {
     phases: {
       cacheLookupMs: 0,
       catalogScanMs: 0,
+      documentWriteMs: 0,
       providerMs: 0,
       stateLoadMs: 0,
       stateWriteMs: 0,
@@ -2532,54 +2534,6 @@ async function prepareTask(args: {
   };
 }
 
-async function runWithConcurrency<T, TResult>(
-  values: readonly T[],
-  concurrency: number,
-  worker: (value: T, index: number) => Promise<TResult>
-): Promise<TResult[]> {
-  if (values.length === 0) {
-    return [];
-  }
-
-  const results: TResult[] = [];
-  let firstError: unknown;
-  let hasError = false;
-  let nextIndex = 0;
-
-  const runWorker = async (): Promise<void> => {
-    while (!hasError && nextIndex < values.length) {
-      const currentIndex = nextIndex;
-      nextIndex += 1;
-      const value = values[currentIndex];
-      if (value === undefined) {
-        continue;
-      }
-
-      try {
-        results[currentIndex] = await worker(value, currentIndex);
-      } catch (error) {
-        if (!hasError) {
-          firstError = error;
-          hasError = true;
-        }
-      }
-    }
-  };
-
-  const workers = Array.from(
-    { length: Math.min(values.length, Math.max(1, concurrency)) },
-    () => runWorker()
-  );
-  await Promise.all(workers);
-  if (hasError) {
-    // Rethrown verbatim: wrapping it would replace the original error and its
-    // stack with a stringified copy.
-    // oxlint-disable-next-line no-throw-literal
-    throw firstError;
-  }
-  return results;
-}
-
 async function evaluateCandidate(args: {
   candidateText: string;
   config: AiTranslateConfig;
@@ -3049,6 +3003,7 @@ async function translateTasksOnce(
   tasks: readonly PreparedDocumentTask[],
   options: {
     cacheMetrics: CandidateCacheRunMetrics;
+    documentConcurrency?: number;
     dryRun?: boolean;
     maxRepairAttempts: number;
     repairAttempt: number;
@@ -3059,7 +3014,7 @@ async function translateTasksOnce(
   }
 
   const scope = config.batching?.scope ?? "locale";
-  const concurrency = config.concurrency?.documents ?? 4;
+  const concurrency = resolveDocumentConcurrency(config, options);
 
   if (scope === "document") {
     return runWithConcurrency(tasks, concurrency, async (task) => {
@@ -3317,6 +3272,7 @@ async function translateTasks(
   tasks: readonly PreparedDocumentTask[],
   options: {
     cacheMetrics: CandidateCacheRunMetrics;
+    documentConcurrency?: number;
     dryRun?: boolean;
   }
 ): Promise<PreparedDocumentTask[]> {
@@ -3341,6 +3297,9 @@ async function translateTasks(
 
     resolvedTasks = await translateTasksOnce(config, resolvedTasks, {
       cacheMetrics: options.cacheMetrics,
+      ...(options.documentConcurrency === undefined
+        ? {}
+        : { documentConcurrency: options.documentConcurrency }),
       maxRepairAttempts,
       repairAttempt,
     });
@@ -3702,21 +3661,68 @@ export async function validateCatalogs(
   const state = await config.state.load({ locales: targetLocales });
   const issues: ValidationIssue[] = [];
   let legacyUnverifiedGeneratedEntries = 0;
-  let sourceDocuments = 0;
+  let sourceDocuments: number;
 
-  for (const catalog of catalogs) {
-    const sourceRefs = filterSourceRefs(
-      await catalog.listDocumentRefs(config.sourceLocale),
-      options
-    );
-    sourceDocuments += sourceRefs.length;
+  /*
+   * `check` runs on every CI job and does nothing but read, so its cost is
+   * almost entirely the round trips it makes. Loading the corpus a document at
+   * a time turns that into one wait per document per locale; the reads are
+   * independent, so they are fanned out under the run's document budget and
+   * then reported in catalog and ref order, keeping the issue list identical
+   * whatever order the reads complete in.
+   */
+  const validationConcurrency = resolveDocumentConcurrency(config, options);
+  const loadedCatalogs = await Promise.all(
+    catalogs.map(async (catalog) => ({
+      catalog,
+      sourceRefs: filterSourceRefs(
+        await catalog.listDocumentRefs(config.sourceLocale),
+        options
+      ),
+    }))
+  );
+  sourceDocuments = loadedCatalogs.reduce(
+    (total, { sourceRefs }) => total + sourceRefs.length,
+    0
+  );
 
-    for (const sourceRef of sourceRefs) {
-      const sourceDocument = await catalog.loadDocument(sourceRef);
-      if (sourceDocument === null) {
-        throw new Error(`Missing source document at ${sourceRef.path}.`);
-      }
+  const loadedByCatalog = await runWithConcurrency(
+    loadedCatalogs,
+    // Catalogs are typically few, so the inner fan-out is what has to be
+    // bounded; running them together only overlaps their listings.
+    loadedCatalogs.length,
+    async ({ catalog, sourceRefs }) => ({
+      catalog,
+      sources: await runWithConcurrency(
+        sourceRefs,
+        validationConcurrency,
+        async (sourceRef) => {
+          const sourceDocument = await catalog.loadDocument(sourceRef);
+          if (sourceDocument === null) {
+            throw new Error(`Missing source document at ${sourceRef.path}.`);
+          }
+          return {
+            sourceDocument,
+            targets: await runWithConcurrency(
+              targetLocales,
+              validationConcurrency,
+              async (locale) => {
+                const targetRef = catalog.createDocumentRef(sourceRef, locale);
+                return {
+                  locale,
+                  targetDocument: await catalog.loadDocument(targetRef),
+                  targetRef,
+                };
+              }
+            ),
+          };
+        }
+      ),
+    })
+  );
 
+  for (const { catalog, sources } of loadedByCatalog) {
+    for (const { sourceDocument, targets } of sources) {
       const sourceValidationIssues =
         await collectSourceDocumentValidationIssues({
           catalogId: catalog.id,
@@ -3737,9 +3743,7 @@ export async function validateCatalogs(
         addressToJsonPointer
       );
 
-      for (const locale of targetLocales) {
-        const targetRef = catalog.createDocumentRef(sourceRef, locale);
-        const targetDocument = await catalog.loadDocument(targetRef);
+      for (const { locale, targetDocument, targetRef } of targets) {
         if (targetDocument === null) {
           issues.push(
             createValidationIssue({
@@ -4277,19 +4281,32 @@ export async function syncCatalogs(
     state = cloneState(state);
     const stateHistoryIndex = buildStateHistoryIndex(state);
 
-    const sourceDocumentPlans: {
-      catalog: CatalogAdapter;
-      sourceDocument: LoadedDocument;
-      sourceIssues: readonly ValidationIssue[];
-    }[] = [];
-
+    const documentConcurrency = resolveDocumentConcurrency(config, options);
     const catalogScanStartedAt = performance.now();
-    for (const catalog of catalogs) {
-      const sourceRefs = filterSourceRefs(
-        await catalog.listDocumentRefs(config.sourceLocale),
-        options
-      );
-      for (const sourceRef of sourceRefs) {
+    /*
+     * Loading the corpus is the one phase that is pure I/O, and doing it one
+     * document at a time makes the scan cost a round trip per file: on a corpus
+     * of thousands of documents that is minutes of waiting on a disk that was
+     * never busy. The refs are independent, so they are fanned out under the
+     * same budget as every other document phase, and collected in ref order so
+     * the plan a run produces does not depend on which read finished first.
+     */
+    const scanRequests = (
+      await Promise.all(
+        catalogs.map(async (catalog) => {
+          const sourceRefs = filterSourceRefs(
+            await catalog.listDocumentRefs(config.sourceLocale),
+            options
+          );
+          return sourceRefs.map((sourceRef) => ({ catalog, sourceRef }));
+        })
+      )
+    ).flat();
+
+    const sourceDocumentPlans = await runWithConcurrency(
+      scanRequests,
+      documentConcurrency,
+      async ({ catalog, sourceRef }) => {
         const sourceDocument = await catalog.loadDocument(sourceRef);
         if (sourceDocument === null) {
           throw new Error(`Missing source document at ${sourceRef.path}.`);
@@ -4299,7 +4316,7 @@ export async function syncCatalogs(
           config,
           sourceDocument,
         });
-        sourceDocumentPlans.push({
+        return {
           catalog,
           sourceDocument,
           sourceIssues:
@@ -4308,9 +4325,9 @@ export async function syncCatalogs(
               : sourceIssues.filter(({ jsonPointer }) =>
                   options.includePaths?.includes(jsonPointer)
                 ),
-        });
+        };
       }
-    }
+    );
 
     const sourceValidationErrors = sourceDocumentPlans.flatMap(
       ({ sourceIssues }) =>
@@ -4359,20 +4376,16 @@ export async function syncCatalogs(
       return { documents, dryRun, metrics, state };
     }
 
-    const documentPlans: {
-      catalog: CatalogAdapter;
-      existingDocument: LoadedDocument | null;
-      sourceIssues: readonly TranslationValidationIssue[];
-      sourceDocument: LoadedDocument;
-      targetDocument: LoadedDocument;
-    }[] = [];
+    // One entry per (source document, locale): each reads the existing target
+    // from disk, so this fans out for the same reason the source scan does.
+    const reconcileRequests = sourceDocumentPlans.flatMap((plan) =>
+      targetLocales.map((locale) => ({ locale, plan }))
+    );
 
-    for (const {
-      catalog,
-      sourceDocument,
-      sourceIssues,
-    } of sourceDocumentPlans) {
-      for (const locale of targetLocales) {
+    const documentPlans = await runWithConcurrency(
+      reconcileRequests,
+      documentConcurrency,
+      async ({ locale, plan: { catalog, sourceDocument, sourceIssues } }) => {
         const targetRef = catalog.createDocumentRef(sourceDocument.ref, locale);
         const existingDocument = await catalog.loadDocument(targetRef);
         // Reconciliation and translation must see the same source, or a unit
@@ -4396,25 +4409,27 @@ export async function syncCatalogs(
           source: localizedSource,
           target: existingDocument,
         });
-        documentPlans.push({
+        return {
           catalog,
           existingDocument,
           sourceDocument: localizedSource,
-          sourceIssues: sourceIssues.map(({ code, message, severity }) => ({
-            code,
-            message,
-            severity,
-          })),
+          sourceIssues: sourceIssues.map(
+            ({ code, message, severity }): TranslationValidationIssue => ({
+              code,
+              message,
+              severity,
+            })
+          ),
           targetDocument,
-        });
+        };
       }
-    }
+    );
 
     metrics.phases.catalogScanMs += performance.now() - catalogScanStartedAt;
     metrics.scannedDocuments = documentPlans.length;
     const preparedTasks = await runWithConcurrency(
       documentPlans,
-      config.concurrency?.documents ?? 4,
+      documentConcurrency,
       (plan) =>
         prepareTask({
           catalog: plan.catalog,
@@ -4463,33 +4478,48 @@ export async function syncCatalogs(
 
     const translatedTasks = await translateTasks(config, preparedTasks, {
       cacheMetrics: metrics,
+      documentConcurrency,
       dryRun,
     });
     const results: DocumentSyncResult[] = [];
 
-    for (const task of translatedTasks) {
-      let resolvedTask = task;
-      const changed = valuesDiffer(task.existingDocument, task.document);
-      const hasFailedItems = task.items.some(
-        (item) => item.status === "failed"
-      );
-      let wroteFile = false;
+    /*
+     * Two write-back concerns that pull in opposite directions: each document's
+     * write and read-back is independent I/O worth overlapping, while folding
+     * the results into state is a single accumulator that must stay ordered or
+     * the same run would produce different state depending on disk timing. So
+     * the I/O fans out first and the fold stays sequential over the result.
+     */
+    const documentWriteStartedAt = performance.now();
+    const writtenTasks = await runWithConcurrency(
+      translatedTasks,
+      documentConcurrency,
+      async (task) => {
+        const hasFailedItems = task.items.some(
+          (item) => item.status === "failed"
+        );
+        const changed = valuesDiffer(task.existingDocument, task.document);
+        if (!changed || dryRun || hasFailedItems) {
+          return { hasFailedItems, resolvedTask: task, wroteFile: false };
+        }
 
-      if (changed && !dryRun && !hasFailedItems) {
         await task.catalog.writeDocument(task.document);
-        wroteFile = true;
-
         const persistedDocument = await task.catalog.loadDocument(
           task.document.ref
         );
-        if (persistedDocument) {
-          resolvedTask = syncTaskStateWithPersistedDocument(
-            task,
-            persistedDocument
-          );
-        }
+        return {
+          hasFailedItems,
+          resolvedTask:
+            persistedDocument === null
+              ? task
+              : syncTaskStateWithPersistedDocument(task, persistedDocument),
+          wroteFile: true,
+        };
       }
+    );
+    metrics.phases.documentWriteMs += performance.now() - documentWriteStartedAt;
 
+    for (const { hasFailedItems, resolvedTask, wroteFile } of writtenTasks) {
       state = hasFailedItems
         ? persistFailedTaskState(state, resolvedTask)
         : persistTaskState(state, resolvedTask);

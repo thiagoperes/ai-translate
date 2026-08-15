@@ -576,6 +576,41 @@ describe("TestTranslationProvider", () => {
     expect(results.flat().map(({ key }) => key)).toEqual(keys);
   });
 
+  it("admits queued requests in arrival order at a large backlog", async () => {
+    const admitted: string[] = [];
+    const { transport } = createMockTransport(async (args) => {
+      const messages = args.messages as readonly { content: string; role: string }[];
+      const payload = JSON.parse(messages[1]?.content ?? "{}") as {
+        requests: readonly { key: string }[];
+      };
+      const key = payload.requests[0]?.key ?? "missing";
+      admitted.push(key);
+      await new Promise((resolve) => { setTimeout(resolve, 0); });
+      return {
+        choices: [{ message: { parsed: { translations: [{ key, translation: "Hallo" }] } } }],
+      };
+    });
+    const provider = new TestTranslationProvider({
+      batchSize: 1,
+      transport,
+      concurrentRequests: 2,
+      maxRetries: 1,
+    });
+    // Deep enough that a queue served by anything other than a stable cursor
+    // would reorder or drop waiters, and deep enough to exercise reclaiming the
+    // served prefix rather than growing the queue for the provider's lifetime.
+    const keys = Array.from({ length: 3000 }, (_unused, index) => `key-${String(index)}`);
+
+    const results = await Promise.all(
+      keys.map((key) =>
+        provider.translate({ locale: "de", requests: [createRequest(key, "Hello")] }),
+      ),
+    );
+
+    expect(admitted).toEqual(keys);
+    expect(results.flat().map(({ key }) => key)).toEqual(keys);
+  });
+
   it("drains active requests, preserves completed batches, and abandons queued work", async () => {
     let activeRequests = 0;
     let activeAtResolution = -1;

@@ -1274,6 +1274,15 @@ function projectSnapshotLocales(
   return { entries, version: snapshot.version };
 }
 
+/**
+ * Shards read at once while loading state. Loading is the first thing a run
+ * does and nothing can start until it finishes, so a shard at a time would put
+ * a full read latency between the run and its first translation for every unit
+ * in the corpus. Bounded because a large corpus has thousands of shards and
+ * opening them all at once would exhaust the process's file descriptors.
+ */
+const SHARD_READ_CONCURRENCY = 32;
+
 async function loadFromShards(
   shardsDir: string,
   scope?: SyncStateLoadScope,
@@ -1282,25 +1291,34 @@ async function loadFromShards(
   const entries: Record<string, SyncStateEntry> = {};
   const context = createShardLoadContext(scope);
 
-  for (const relativePath of shardFiles) {
-    const absolutePath = path.join(shardsDir, relativePath);
-    const shard = await readShard(absolutePath);
-    if (!shard) {
-      continue;
-    }
+  // Read in file order so a conflicting-record error names the same shard on
+  // every run, however the reads interleave.
+  for (let index = 0; index < shardFiles.length; index += SHARD_READ_CONCURRENCY) {
+    const batch = await Promise.all(
+      shardFiles.slice(index, index + SHARD_READ_CONCURRENCY).map(async (relativePath) => {
+        const absolutePath = path.join(shardsDir, relativePath);
+        return { absolutePath, shard: await readShard(absolutePath) };
+      }),
+    );
 
-    for (const [key, entry] of Object.entries(
-      loadEntriesFromShard(shard, absolutePath, context),
-    )) {
-      const existing = entries[key];
-      if (existing === undefined) {
-        entries[key] = entry;
+    for (const { absolutePath, shard } of batch) {
+      if (!shard) {
         continue;
       }
-      if (JSON.stringify(existing) !== JSON.stringify(entry)) {
-        throw new Error(
-          `Conflicting ai-translate shard records for ${key}; remove or reconcile duplicate legacy and canonical shards.`,
-        );
+
+      for (const [key, entry] of Object.entries(
+        loadEntriesFromShard(shard, absolutePath, context),
+      )) {
+        const existing = entries[key];
+        if (existing === undefined) {
+          entries[key] = entry;
+          continue;
+        }
+        if (JSON.stringify(existing) !== JSON.stringify(entry)) {
+          throw new Error(
+            `Conflicting ai-translate shard records for ${key}; remove or reconcile duplicate legacy and canonical shards.`,
+          );
+        }
       }
     }
   }
