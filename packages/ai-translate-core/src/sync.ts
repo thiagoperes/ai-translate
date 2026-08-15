@@ -28,6 +28,7 @@ import {
 } from "./audit";
 import {
   createTranslationCandidateCacheKey,
+  resolveCandidateCacheIdentity,
   selectRelevantGlossaryTerms,
 } from "./candidate-cache";
 import { resolveDocumentConcurrency, runWithConcurrency } from "./concurrency";
@@ -285,9 +286,13 @@ function ensureValidConfig(config: AiTranslateConfig): void {
         "generationRevision is required when candidateCache is configured."
       );
     }
-    for (const [field, value] of Object.entries(
-      config.candidateCache.identity
-    )) {
+    const identity = resolveCandidateCacheIdentity(config);
+    if (identity === undefined) {
+      throw new Error(
+        "candidateCache.identity is required for a provider that does not report candidateCacheIdentity."
+      );
+    }
+    for (const [field, value] of Object.entries(identity)) {
       if (value.trim().length === 0) {
         throw new Error(`candidateCache.identity.${field} must be non-empty.`);
       }
@@ -492,9 +497,11 @@ function candidateCacheKey(
   item: PreparedTranslationItem,
   request: TranslationRequest = item.request
 ): TranslationCandidateCacheKey | undefined {
+  const identity = resolveCandidateCacheIdentity(config);
   if (
     config.candidateCache === undefined ||
-    config.generationRevision === undefined
+    config.generationRevision === undefined ||
+    identity === undefined
   ) {
     return undefined;
   }
@@ -506,7 +513,7 @@ function candidateCacheKey(
     ...(contentRoleRevision === undefined ? {} : { contentRoleRevision }),
     generationRevision: config.generationRevision,
     ...(config.glossary === undefined ? {} : { glossary: config.glossary }),
-    identity: config.candidateCache.identity,
+    identity,
     instructionDigest: item.contextDigest,
     request,
   });
@@ -4564,6 +4571,7 @@ export async function syncCatalogs(
     metrics.durationMs = Math.round(performance.now() - startedAt);
     metrics.phases.cacheLookupMs = Math.round(metrics.phases.cacheLookupMs);
     metrics.phases.catalogScanMs = Math.round(metrics.phases.catalogScanMs);
+    metrics.phases.documentWriteMs = Math.round(metrics.phases.documentWriteMs);
     metrics.phases.providerMs = Math.round(metrics.phases.providerMs);
     metrics.phases.stateLoadMs = Math.round(metrics.phases.stateLoadMs);
     metrics.phases.stateWriteMs = Math.round(metrics.phases.stateWriteMs);

@@ -13,7 +13,10 @@ import {
   makeLegacyStateKey,
   makeStateKey,
 } from "./address";
-import { createTranslationCandidateCacheKey } from "./candidate-cache";
+import {
+  createTranslationCandidateCacheKey,
+  resolveCandidateCacheIdentity,
+} from "./candidate-cache";
 import { resolveDocumentConcurrency, runWithConcurrency } from "./concurrency";
 import { digestValue } from "./hash";
 import { mapEntriesByPointer } from "./json";
@@ -1697,9 +1700,11 @@ function candidateCacheKey(
   config: AiTranslateConfig,
   candidate: AuditCandidate
 ): TranslationCandidateCacheKey | undefined {
+  const identity = resolveCandidateCacheIdentity(config);
   if (
     config.candidateCache === undefined ||
-    config.generationRevision === undefined
+    config.generationRevision === undefined ||
+    identity === undefined
   ) {
     return undefined;
   }
@@ -1728,7 +1733,7 @@ function candidateCacheKey(
     ...(contentRoleRevision === undefined ? {} : { contentRoleRevision }),
     generationRevision: config.generationRevision,
     ...(config.glossary === undefined ? {} : { glossary: config.glossary }),
-    identity: config.candidateCache.identity,
+    identity,
     instructionDigest: candidate.contextDigest,
     request,
   });

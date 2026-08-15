@@ -253,6 +253,113 @@ describe("cache semantics", () => {
     expect(forced.metrics.candidateCacheHits).toBeGreaterThan(0);
   });
 
+  it("takes the cache identity from the provider when the config omits one", async () => {
+    const catalog = createMemoryCatalog();
+    const state = createStateStore();
+    const cache = createMemoryCandidateCache();
+    seedSource(catalog, "Hello world");
+    const translate = vi.fn<TranslationProvider["translate"]>(({ requests }) =>
+      Promise.resolve(
+        requests.map((request) => ({
+          key: request.key,
+          selfCheck: {
+            modelId: "model-v1",
+            planDigests: [],
+            verified: true as const,
+          },
+          translation: "Hallo Welt",
+        }))
+      )
+    );
+    const config: AiTranslateConfig = {
+      catalogs: [catalog],
+      candidateCache: { store: cache },
+      generationRevision: "generation-v1",
+      provider: {
+        candidateCacheIdentity: {
+          modelId: "model-v1",
+          providerId: "memory",
+          providerRevision: "provider-v1",
+        },
+        translate,
+      },
+      sourceLocale: "en",
+      state,
+      targetLocales: ["de"],
+      validation: { semanticAuditExecution: "generator-self-check" },
+    };
+
+    await syncCatalogs(config);
+    expect(translate).toHaveBeenCalledTimes(1);
+
+    translate.mockClear();
+    const cached = await syncCatalogs(config, { forceRetranslate: true });
+    expect(translate).not.toHaveBeenCalled();
+    expect(cached.metrics.candidateCacheHits).toBeGreaterThan(0);
+  });
+
+  it("refuses a cache it cannot key", async () => {
+    const catalog = createMemoryCatalog();
+    seedSource(catalog, "Hello world");
+
+    await expect(
+      syncCatalogs({
+        catalogs: [catalog],
+        candidateCache: { store: createMemoryCandidateCache() },
+        generationRevision: "generation-v1",
+        provider: { translate: () => Promise.resolve([]) },
+        sourceLocale: "en",
+        state: createStateStore(),
+        targetLocales: ["de"],
+      })
+    ).rejects.toThrow(
+      "candidateCache.identity is required for a provider that does not report candidateCacheIdentity."
+    );
+  });
+
+  it("does not serve a cached candidate after the provider's model changes", async () => {
+    const catalog = createMemoryCatalog();
+    const state = createStateStore();
+    const cache = createMemoryCandidateCache();
+    seedSource(catalog, "Hello world");
+    const translate = vi.fn<TranslationProvider["translate"]>(({ requests }) =>
+      Promise.resolve(
+        requests.map((request) => ({
+          key: request.key,
+          selfCheck: {
+            modelId: "model-v1",
+            planDigests: [],
+            verified: true as const,
+          },
+          translation: "Hallo Welt",
+        }))
+      )
+    );
+    const configFor = (modelId: string): AiTranslateConfig => ({
+      catalogs: [catalog],
+      candidateCache: { store: cache },
+      generationRevision: "generation-v1",
+      provider: {
+        candidateCacheIdentity: {
+          modelId,
+          providerId: "memory",
+          providerRevision: "provider-v1",
+        },
+        translate,
+      },
+      sourceLocale: "en",
+      state,
+      targetLocales: ["de"],
+      validation: { semanticAuditExecution: "generator-self-check" },
+    });
+
+    await syncCatalogs(configFor("model-v1"));
+    translate.mockClear();
+
+    await syncCatalogs(configFor("model-v2"), { forceRetranslate: true });
+    expect(translate).toHaveBeenCalledTimes(1);
+  });
+
   it("transport knobs are not part of generation identity", async () => {
     const catalog = createMemoryCatalog();
     const state = createStateStore();

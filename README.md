@@ -79,6 +79,8 @@ Prompt caching is not a meaningful lever here. The only prefix shared across cal
 
 A glossary costs nothing it does not earn. Each call carries only the terms that appear in the strings it is translating, so a 500-term glossary and no glossary at all bill the same for a batch that uses neither — 16.6 tokens per key at 100 keys per call, against 95.7 if all 500 terms rode along.
 
+Repeated source text is worth paying for once. State stops a pointer being retranslated; the [candidate cache](packages/ai-translate-cli/README.md#reusing-translations-across-documents) stops the same English string being translated twice because it appears in two files. It is two lines of config and keys itself on the model your provider reports, so switching models invalidates it rather than serving the old one's output.
+
 Token counts are measured by capturing the payloads the provider actually sends at stock defaults, the same method as [`bench/prompt.bench.mjs`](bench/prompt.bench.mjs), rather than estimated from the prompt source. Prices are the published rate cards as of 2026-08-07 and will drift; re-check them before quoting a budget.
 
 ## Install

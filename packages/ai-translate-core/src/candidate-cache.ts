@@ -1,11 +1,25 @@
 import { digestTranslationContext } from "./acceptance";
 import { digestValue } from "./hash";
 import type {
+  AiTranslateConfig,
   GlossaryTerm,
   TranslationCandidateCacheIdentity,
   TranslationCandidateCacheKey,
   TranslationRequest,
 } from "./types";
+
+/**
+ * The provider's own identity unless the config overrides it, so turning the
+ * cache on does not mean restating the model and vendor the provider was already
+ * constructed with — and cannot silently disagree with them.
+ */
+export function resolveCandidateCacheIdentity(
+  config: Pick<AiTranslateConfig, "candidateCache" | "provider">
+): TranslationCandidateCacheIdentity | undefined {
+  return (
+    config.candidateCache?.identity ?? config.provider.candidateCacheIdentity
+  );
+}
 
 /**
  * Generation-cache identity contains only model-visible inputs. Validator

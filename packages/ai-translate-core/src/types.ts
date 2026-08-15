@@ -344,6 +344,17 @@ export interface TranslationResponse {
 }
 
 export interface TranslationProvider {
+  /**
+   * What this provider is, for candidate-cache keys: the model it calls, the
+   * vendor it calls it through, and the revision of its generation contract.
+   *
+   * Reported rather than configured so a cache cannot outlive the thing that
+   * filled it. Hand-written identities drift — change `model` and forget the
+   * identity, and every hit serves the old model's output. Providers that
+   * cannot describe themselves omit this, and their configs supply
+   * `candidateCache.identity` instead.
+   */
+  readonly candidateCacheIdentity?: TranslationCandidateCacheIdentity;
   translate(args: {
     batchContext?: TranslationContext;
     batchKey?: string;
@@ -446,7 +457,11 @@ export interface TranslationCandidateCacheConfig {
   compatibleSelfCheckPlanDigests?: (
     plan: TranslationSelfCheckPlan
   ) => readonly string[];
-  identity: TranslationCandidateCacheIdentity;
+  /**
+   * Defaults to the provider's own `candidateCacheIdentity`. Set it only for a
+   * provider that does not report one.
+   */
+  identity?: TranslationCandidateCacheIdentity;
   segmentDeltaReuse?: TranslationCandidateSegmentDeltaConfig;
   store: TranslationCandidateCache;
 }

@@ -39,6 +39,39 @@ export default defineConfig({
 
 The full config surface is documented as types in [`@ai-translate/core`](../ai-translate-core), on the `AiTranslateConfig` interface.
 
+### Reusing translations across documents
+
+State makes a run skip work it has already done for *this* pointer in *this*
+locale. The candidate cache is what stops you paying twice for the same English
+string appearing in two places — a shared button label, a repeated heading, a
+paragraph that moved between files. It is off by default and takes two settings:
+
+```ts
+import { createFileTranslationCandidateCache } from "@ai-translate/fs-json";
+import { TRANSLATION_OUTPUT_CONTRACT_REVISION } from "@ai-translate/provider-openai";
+
+export default defineConfig({
+  // ...
+  generationRevision: TRANSLATION_OUTPUT_CONTRACT_REVISION,
+  candidateCache: {
+    store: createFileTranslationCandidateCache({ rootDir: process.cwd() }),
+  },
+});
+```
+
+`generationRevision` states which generation contract your stored translations
+came from, so a prompt or schema change that alters output retranslates instead
+of being served from cache. Pinning it to the provider's exported contract
+revision keeps that automatic.
+
+Nothing else is needed: the cache keys itself on the model and vendor the
+provider reports, so changing `model` invalidates the cache on its own rather
+than quietly serving the previous model's output. Set `candidateCache.identity`
+only for a custom provider that cannot report one.
+
+Commit the cache directory to share hits across CI runs, or leave it out of
+version control to keep it per-machine.
+
 ### Environment variables
 
 Before every command the CLI loads, in order and without overriding anything already set in the environment:

@@ -11,6 +11,7 @@ import type {
   SemanticAuditProvider,
   SemanticAuditRequest,
   SemanticAuditResponse,
+  TranslationCandidateCacheIdentity,
   TranslationConstraint,
   TranslationContentRole,
   TranslationContext,
@@ -3163,6 +3164,13 @@ function protectedAssemblyFailureReason(
 }
 
 export class StructuredTranslationProvider implements TranslationProvider {
+  /**
+   * Reported so a config can turn the candidate cache on without restating the
+   * model and vendor this provider was constructed with. The revision is the
+   * generation contract, so a prompt or schema change that alters output
+   * invalidates the cache rather than serving the previous contract's answers.
+   */
+  readonly candidateCacheIdentity: TranslationCandidateCacheIdentity;
   private readonly batchSize: number;
   private readonly concurrentRequests: number;
   private readonly maxCharsPerBatch: number;
@@ -3216,6 +3224,11 @@ export class StructuredTranslationProvider implements TranslationProvider {
     this.requestLimiter = new RequestLimiter(this.concurrentRequests);
     this.systemPrompt = options.systemPrompt;
     this.temperature = options.temperature;
+    this.candidateCacheIdentity = {
+      modelId: this.model,
+      providerId: options.transport.label,
+      providerRevision: TRANSLATION_OUTPUT_CONTRACT_REVISION,
+    };
   }
 
   async translate(args: {
