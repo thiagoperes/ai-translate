@@ -227,6 +227,26 @@ Need a different format, a different model, or a different i18n library? `Catalo
 5. Queued entries are batched per locale and sent to the provider, with any glossary terms and context rules that apply.
 6. Candidates are validated, optionally audited, and written atomically. State is updated in the same transaction.
 
+## What a steady-state run costs
+
+The first pass pays the model for everything. Every run after it pays the engine
+to work out what *not* to translate, and that has to stay cheap as the corpus
+grows. Measured on 500 documents across 4 locales (40,000 entries) against a
+provider with no latency, so only engine time shows:
+
+| Run | Time | Sent to the model |
+| --- | --- | --- |
+| First pass | 1497ms | 40,000 entries |
+| No-op sync | 719ms | nothing |
+| `check` (read-only CI gate) | 450ms | nothing |
+| One string edited in 5 documents | 689ms | 400 entries |
+| One key deleted from 5 documents | 640ms | nothing |
+
+Per-entry cost holds from 40,000 to 320,000 entries, so the shape is linear.
+A no-op run also writes nothing: state files are left byte-identical, so `git
+status` stays clean and a one-document edit arrives as a diff touching that
+document, its translations, and one state file — not the whole corpus.
+
 ## Scaling a run
 
 Two limits decide throughput, and the lower one wins: `concurrency.documents`
@@ -252,10 +272,13 @@ pnpm bench:check     # fail on regression
 
 `bench/throughput.bench.mjs` reports where a sync's wall clock goes — catalog
 scan, document write, state load and write — against a provider of known latency,
-so an engine-side regression is visible separately from model time:
+so an engine-side regression is visible separately from model time.
+`bench/lifecycle.bench.mjs` reports the cost of each kind of run: first pass,
+no-op, delta, removal, and `check`.
 
 ```bash
 node bench/throughput.bench.mjs --documents 800 --locales 4 --concurrency 64
+node bench/lifecycle.bench.mjs --documents 500 --locales 4
 ```
 
 ## Development
