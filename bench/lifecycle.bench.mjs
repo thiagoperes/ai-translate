@@ -141,6 +141,21 @@ async function main() {
         createNamespaceJsonCatalog({ id: "messages", rootDir: contentDir, sourceLocale: "en" }),
       ],
       concurrency: { documents: 32 },
+      // A bare config skips context resolution and glossary selection entirely,
+      // which are per-entry costs every real project pays. Measuring without
+      // them would report a run nobody actually has.
+      context: {
+        project: {
+          audience: "software teams evaluating developer tooling",
+          product: "a hosted workspace for software teams",
+          tone: "direct, concrete, and free of hype",
+        },
+      },
+      glossary: [
+        { note: "Never translate the brand name.", source: "Acme", target: "Acme" },
+        { source: "workspace", target: "Arbeitsbereich" },
+        { source: "deployment", target: "Bereitstellung" },
+      ],
       provider: counting.provider,
       sourceLocale: "en",
       state: createShardedJsonStateStore({ rootDir }),

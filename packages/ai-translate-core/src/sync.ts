@@ -2956,9 +2956,16 @@ async function applyProviderResponses(args: {
     const generatedStateEntry = createStateEntry({
       catalogId: task.document.ref.catalogId,
       contextDigest: item.contextDigest,
-      ...(config.generationRevision === undefined
-        ? {}
-        : { generationRevision: config.generationRevision }),
+      /*
+       * Recorded even when the config names no revision, because the very next
+       * run records it anyway: a generated entry that reaches the preserve path
+       * without one is stamped `legacy-unverified` there. Leaving it off here
+       * made the run after a first pass rewrite every state record in the
+       * corpus to add a value that changes no decision, so a one-string edit
+       * arrived as a diff touching every shard.
+       */
+      generationRevision:
+        config.generationRevision ?? LEGACY_UNVERIFIED_GENERATION_REVISION,
       locale: task.document.ref.locale,
       origin: "generated",
       pointer: item.pointer,

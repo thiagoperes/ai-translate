@@ -136,6 +136,22 @@ function normalizeConstraints(
   return result.length === 0 ? undefined : result;
 }
 
+/**
+ * Normalization is a pure function of the context object, and the objects that
+ * reach it are long-lived: a run resolves the same `context.project` and the
+ * same rule contexts once per entry, which on a large corpus means normalizing
+ * the identical object a million times — trimming the same strings, sorting and
+ * stringifying the same constraints. Keyed on identity rather than content
+ * because hashing the content is the work being avoided.
+ *
+ * Contexts are treated as immutable values everywhere in the engine. Mutating
+ * one after it has been normalized would serve the previous result.
+ */
+const normalizedContexts = new WeakMap<
+  TranslationContext,
+  TranslationContext | undefined
+>();
+
 export function normalizeTranslationContext(
   context: TranslationContext | undefined,
 ): TranslationContext | undefined {
@@ -143,6 +159,18 @@ export function normalizeTranslationContext(
     return undefined;
   }
 
+  if (normalizedContexts.has(context)) {
+    return normalizedContexts.get(context);
+  }
+
+  const result = normalizeTranslationContextUncached(context);
+  normalizedContexts.set(context, result);
+  return result;
+}
+
+function normalizeTranslationContextUncached(
+  context: TranslationContext,
+): TranslationContext | undefined {
   const normalized: TranslationContext = {};
   const audience = normalizeContextValue(context.audience);
   const constraints = normalizeConstraints(context.constraints);

@@ -1077,7 +1077,21 @@ async function waitForStateMutations(
   }
 }
 
+/**
+ * Rewrites a shard only when its bytes would change.
+ *
+ * Most runs change a handful of units and leave the rest of the corpus exactly
+ * as it was, but a save repacks and rewrites every shard regardless. That costs
+ * two fsyncs and a rename per untouched file, and it touches the mtime of files
+ * a reviewer can see are unchanged. Comparing against what is already on disk is
+ * one read against that, and it is what makes a no-op run genuinely a no-op.
+ */
 async function writeCompactJsonFileAtomic(filePath: string, value: unknown): Promise<void> {
+  const contents = `${JSON.stringify(value)}\n`;
+  if (await fileContentMatches(filePath, contents)) {
+    return;
+  }
+
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const tempPath = path.join(
     path.dirname(filePath),
@@ -1086,7 +1100,7 @@ async function writeCompactJsonFileAtomic(filePath: string, value: unknown): Pro
   let handle: fs.FileHandle | undefined;
   try {
     handle = await fs.open(tempPath, "wx");
-    await handle.writeFile(`${JSON.stringify(value)}\n`, "utf8");
+    await handle.writeFile(contents, "utf8");
     await handle.sync();
     await handle.close();
     handle = undefined;
@@ -1100,6 +1114,16 @@ async function writeCompactJsonFileAtomic(filePath: string, value: unknown): Pro
   } finally {
     await handle?.close();
     await fs.rm(tempPath, { force: true });
+  }
+}
+
+async function fileContentMatches(filePath: string, contents: string): Promise<boolean> {
+  try {
+    return (await fs.readFile(filePath, "utf8")) === contents;
+  } catch {
+    // Missing, unreadable, or racing with another writer: fall through and write,
+    // which is the outcome that cannot lose data.
+    return false;
   }
 }
 

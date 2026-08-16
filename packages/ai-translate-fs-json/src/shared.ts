@@ -96,6 +96,13 @@ export interface JsonEntryOptions {
   /** When set, sibling plural keys are marked as one structure group so
    * locales with more plural forms than the source still validate. */
   plurals?: PluralKeyStrategy;
+  /**
+   * Set to `false` for entries that only need addresses and values. Tokenizing
+   * is the most expensive part of building an entry list and every consumer of
+   * `Entry.tokens` is a validator, so internal walks that do no validation skip
+   * it. Entries built this way must not be handed to validation.
+   */
+  tokenize?: boolean;
 }
 
 export function buildEntriesFromJson(
@@ -106,7 +113,11 @@ export function buildEntriesFromJson(
   // class instance, which would lose `this` once `tokenize` is detached.
   const { messageFormat } = options;
   const tokenize =
-    messageFormat === undefined ? tokenizeText : (text: string) => messageFormat.tokenize(text);
+    options.tokenize === false
+      ? undefined
+      : messageFormat === undefined
+        ? tokenizeText
+        : (text: string) => messageFormat.tokenize(text);
   const messageFormatId = messageFormat?.id;
   const structureGroups =
     options.plurals === undefined
@@ -126,7 +137,7 @@ export function buildEntriesFromJson(
     } satisfies Omit<Entry, "tokens">;
 
     entries.push(
-      typeof value === "string"
+      typeof value === "string" && tokenize !== undefined
         ? {
             ...baseEntry,
             tokens: [...tokenize(value)],
@@ -159,6 +170,15 @@ export function reconcileJsonRoot(
   return nextRoot;
 }
 
+/** Whether any leaf sits inside an array, i.e. whether index rebasing applies. */
+function hasIndexedLeaf(root: JsonValue): boolean {
+  let found = false;
+  visitJsonLeaves(root, ({ address }) => {
+    found ||= address.some((segment) => segment.kind === "index");
+  });
+  return found;
+}
+
 export function reconcileJsonRootWithHistory(
   sourceRoot: JsonValue,
   targetRoot: JsonValue | undefined,
@@ -172,13 +192,30 @@ export function reconcileJsonRootWithHistory(
     return { root: nextRoot };
   }
 
-  const sourceEntries = buildEntriesFromJson(sourceRoot);
-  const targetEntries = buildEntriesFromJson(targetRoot);
-  const indexed = rebaseIndexedEntries({ history, sourceEntries, targetEntries });
+  /*
+   * Index rebasing exists so a reordered or renumbered array keeps its
+   * translations, and it only ever inspects leaves addressed through an array.
+   * A flat message catalog has none, which is the common case, so building two
+   * full entry lists — tokenizing every string in both documents — to feed a
+   * matcher that will look at nothing is the single most expensive thing a
+   * no-op run used to do.
+   *
+   * Retirement still has to happen when the arrays are gone from the source but
+   * the history remembers them, and that needs only the history.
+   */
+  const indexed = hasIndexedLeaf(sourceRoot)
+    ? rebaseIndexedEntries({
+        history,
+        // Tokens are not part of index matching, which compares values and
+        // address shape, so the tokenizer is left out of both walks.
+        sourceEntries: buildEntriesFromJson(sourceRoot, { tokenize: false }),
+        targetEntries: buildEntriesFromJson(targetRoot, { tokenize: false }),
+      })
+    : rebaseIndexedEntries({ history, sourceEntries: [], targetEntries: [] });
+
   visitJsonLeaves(sourceRoot, ({ address }) => {
-    const pointer = addressToJsonPointer(address);
     const targetValue = address.some((segment) => segment.kind === "index")
-      ? indexed.valuesByPointer.get(pointer)
+      ? indexed.valuesByPointer.get(addressToJsonPointer(address))
       : getJsonValueAtAddress(targetRoot, address);
     if (targetValue !== undefined) {
       setJsonValueAtAddress(nextRoot, address, targetValue);
