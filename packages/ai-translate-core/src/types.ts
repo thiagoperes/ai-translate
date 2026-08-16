@@ -344,6 +344,17 @@ export interface TranslationResponse {
 }
 
 export interface TranslationProvider {
+  /**
+   * What this provider is, for candidate-cache keys: the model it calls, the
+   * vendor it calls it through, and the revision of its generation contract.
+   *
+   * Reported rather than configured so a cache cannot outlive the thing that
+   * filled it. Hand-written identities drift — change `model` and forget the
+   * identity, and every hit serves the old model's output. Providers that
+   * cannot describe themselves omit this, and their configs supply
+   * `candidateCache.identity` instead.
+   */
+  readonly candidateCacheIdentity?: TranslationCandidateCacheIdentity;
   translate(args: {
     batchContext?: TranslationContext;
     batchKey?: string;
@@ -446,7 +457,11 @@ export interface TranslationCandidateCacheConfig {
   compatibleSelfCheckPlanDigests?: (
     plan: TranslationSelfCheckPlan
   ) => readonly string[];
-  identity: TranslationCandidateCacheIdentity;
+  /**
+   * Defaults to the provider's own `candidateCacheIdentity`. Set it only for a
+   * provider that does not report one.
+   */
+  identity?: TranslationCandidateCacheIdentity;
   segmentDeltaReuse?: TranslationCandidateSegmentDeltaConfig;
   store: TranslationCandidateCache;
 }
@@ -766,8 +781,13 @@ export interface AiTranslateConfig {
   batching?: {
     /**
      * Maximum logical requests sent through one provider call for locale
-     * batching. Providers may apply a smaller character-bounded split while
+     * batching. Defaults to 100, matching the batch size the shipped providers
+     * default to; providers may apply a smaller character-bounded split while
      * preserving every request's own context.
+     *
+     * Setting this above the provider's own batch size does not produce larger
+     * calls — the provider splits the group and the remainder becomes a short
+     * call paying a full system prompt for a few keys. Raise both together.
      */
     maxRequestsPerProviderCall?: number;
     scope?: "document" | "locale";
@@ -787,6 +807,16 @@ export interface AiTranslateConfig {
    */
   compatibleGenerationRevisions?: readonly string[];
   concurrency?: {
+    /**
+     * Documents worked on at once across every phase of a run: loading sources,
+     * reconciling targets, preparing entries, dispatching provider batches, and
+     * writing results. Defaults to 4.
+     *
+     * This bounds the engine, not the network. How many requests reach the model
+     * at once is the provider's `concurrentRequests`, and the lower of the two
+     * wins — raising this alone will not push more work through a provider still
+     * capped at its own default.
+     */
     documents?: number;
   };
   contentRole?: TranslationContentRoleResolver;
@@ -880,6 +910,8 @@ export interface SyncCatalogsOptions {
   /** Internal: the caller holds the state store's exclusive snapshot lock. */
   assumeStateLock?: boolean;
   catalogIds?: readonly string[];
+  /** Overrides `concurrency.documents` for this run. */
+  documentConcurrency?: number;
   dryRun?: boolean;
   forceRetranslate?: boolean;
   forceRetranslatePaths?: readonly string[];
@@ -914,6 +946,8 @@ export interface DocumentSyncResult {
 export interface SyncPhaseTimings {
   cacheLookupMs: number;
   catalogScanMs: number;
+  /** Writing translated documents back, including the read-back that follows. */
+  documentWriteMs: number;
   providerMs: number;
   stateLoadMs: number;
   stateWriteMs: number;

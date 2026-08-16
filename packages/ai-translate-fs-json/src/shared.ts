@@ -52,6 +52,59 @@ export async function readJsonFile(filePath: string): Promise<JsonValue | null> 
   }
 }
 
+/**
+ * Largest state file this library will write.
+ *
+ * State is meant to be committed, and GitHub refuses a push containing a file
+ * over 100 MiB outright, warning from 50 MiB. Discovering that from a rejected
+ * push — after a run that may have spent real money — is the worst place to
+ * learn it, so a write that would cross the line fails here instead, while the
+ * transaction can still be rolled back.
+ */
+export const MAX_COMMITTABLE_STATE_BYTES = 40 * 1024 * 1024;
+
+/**
+ * Serializes state and refuses to write a file too large to commit.
+ *
+ * V8 throws `RangeError: Invalid string length` once a JSON string passes its
+ * maximum length, which on a large corpus arrives before any size check could
+ * run and says nothing about what went wrong, so it is translated here too.
+ */
+export function serializeStateFile(args: {
+  advice: string;
+  filePath: string;
+  /** Bytes allowed for this file. `Infinity` disables the check. */
+  maxBytes?: number;
+  pretty: boolean;
+  value: unknown;
+}): string {
+  const maxBytes = args.maxBytes ?? MAX_COMMITTABLE_STATE_BYTES;
+  let contents: string;
+  try {
+    contents = args.pretty
+      ? `${JSON.stringify(args.value, null, 2)}\n`
+      : `${JSON.stringify(args.value)}\n`;
+  } catch (error) {
+    if (error instanceof RangeError) {
+      throw new Error(
+        `ai-translate state for ${args.filePath} is too large to serialize. ${args.advice}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+
+  const bytes = Buffer.byteLength(contents, "utf8");
+  if (bytes > maxBytes) {
+    throw new Error(
+      `ai-translate state file ${args.filePath} would be ${(bytes / 1024 / 1024).toFixed(1)} MiB, ` +
+        `over the ${(maxBytes / 1024 / 1024).toFixed(0)} MiB limit for a committed file. ` +
+        `${args.advice} Raise maxFileBytes if this state is not committed.`,
+    );
+  }
+  return contents;
+}
+
 export async function writeJsonFileAtomic(
   filePath: string,
   value: unknown,
@@ -96,6 +149,13 @@ export interface JsonEntryOptions {
   /** When set, sibling plural keys are marked as one structure group so
    * locales with more plural forms than the source still validate. */
   plurals?: PluralKeyStrategy;
+  /**
+   * Set to `false` for entries that only need addresses and values. Tokenizing
+   * is the most expensive part of building an entry list and every consumer of
+   * `Entry.tokens` is a validator, so internal walks that do no validation skip
+   * it. Entries built this way must not be handed to validation.
+   */
+  tokenize?: boolean;
 }
 
 export function buildEntriesFromJson(
@@ -106,7 +166,11 @@ export function buildEntriesFromJson(
   // class instance, which would lose `this` once `tokenize` is detached.
   const { messageFormat } = options;
   const tokenize =
-    messageFormat === undefined ? tokenizeText : (text: string) => messageFormat.tokenize(text);
+    options.tokenize === false
+      ? undefined
+      : messageFormat === undefined
+        ? tokenizeText
+        : (text: string) => messageFormat.tokenize(text);
   const messageFormatId = messageFormat?.id;
   const structureGroups =
     options.plurals === undefined
@@ -126,7 +190,7 @@ export function buildEntriesFromJson(
     } satisfies Omit<Entry, "tokens">;
 
     entries.push(
-      typeof value === "string"
+      typeof value === "string" && tokenize !== undefined
         ? {
             ...baseEntry,
             tokens: [...tokenize(value)],
@@ -159,6 +223,15 @@ export function reconcileJsonRoot(
   return nextRoot;
 }
 
+/** Whether any leaf sits inside an array, i.e. whether index rebasing applies. */
+function hasIndexedLeaf(root: JsonValue): boolean {
+  let found = false;
+  visitJsonLeaves(root, ({ address }) => {
+    found ||= address.some((segment) => segment.kind === "index");
+  });
+  return found;
+}
+
 export function reconcileJsonRootWithHistory(
   sourceRoot: JsonValue,
   targetRoot: JsonValue | undefined,
@@ -172,13 +245,30 @@ export function reconcileJsonRootWithHistory(
     return { root: nextRoot };
   }
 
-  const sourceEntries = buildEntriesFromJson(sourceRoot);
-  const targetEntries = buildEntriesFromJson(targetRoot);
-  const indexed = rebaseIndexedEntries({ history, sourceEntries, targetEntries });
+  /*
+   * Index rebasing exists so a reordered or renumbered array keeps its
+   * translations, and it only ever inspects leaves addressed through an array.
+   * A flat message catalog has none, which is the common case, so building two
+   * full entry lists — tokenizing every string in both documents — to feed a
+   * matcher that will look at nothing is the single most expensive thing a
+   * no-op run used to do.
+   *
+   * Retirement still has to happen when the arrays are gone from the source but
+   * the history remembers them, and that needs only the history.
+   */
+  const indexed = hasIndexedLeaf(sourceRoot)
+    ? rebaseIndexedEntries({
+        history,
+        // Tokens are not part of index matching, which compares values and
+        // address shape, so the tokenizer is left out of both walks.
+        sourceEntries: buildEntriesFromJson(sourceRoot, { tokenize: false }),
+        targetEntries: buildEntriesFromJson(targetRoot, { tokenize: false }),
+      })
+    : rebaseIndexedEntries({ history, sourceEntries: [], targetEntries: [] });
+
   visitJsonLeaves(sourceRoot, ({ address }) => {
-    const pointer = addressToJsonPointer(address);
     const targetValue = address.some((segment) => segment.kind === "index")
-      ? indexed.valuesByPointer.get(pointer)
+      ? indexed.valuesByPointer.get(addressToJsonPointer(address))
       : getJsonValueAtAddress(targetRoot, address);
     if (targetValue !== undefined) {
       setJsonValueAtAddress(nextRoot, address, targetValue);

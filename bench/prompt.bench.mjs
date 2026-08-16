@@ -193,6 +193,38 @@ async function renderSystemPrompt(locale, { productionLike }) {
   return payloadChars(calls[0]).systemText;
 }
 
+/**
+ * Corpus-wide vocabulary that a given batch happens not to use: product nouns,
+ * brand names, and domain terms spread across the project rather than present in
+ * any one string. This is what most of a real glossary looks like from the point
+ * of view of a hundred-string batch, and sending it costs tokens on every call.
+ */
+function unusedGlossary(size) {
+  return Array.from({ length: size }, (_, index) => ({
+    note: `Domain vocabulary entry number ${index}.`,
+    source: `term-${index}`,
+    target: `Begriff-${index}`,
+  }));
+}
+
+async function measureGlossarySize(size, keys, locale) {
+  const { calls, client } = captureClient();
+  const provider = createOpenAiTranslationProvider({ batchSize: keys, client, model: "bench-model" });
+  await provider.translate({
+    glossary: unusedGlossary(size),
+    locale,
+    requests: buildRequests(keys, locale),
+  });
+
+  const parts = payloadChars(calls[0]);
+  const totalTokens = estimateTokens("x".repeat(parts.system + parts.user + parts.schema));
+  return {
+    glossaryTerms: size,
+    systemPromptTokens: estimateTokens(parts.systemText),
+    totalTokensPerKey: Number((totalTokens / keys).toFixed(1)),
+  };
+}
+
 async function measureCrossLocalePrefix(locales, options) {
   const systemTexts = [];
   for (const locale of locales) {
@@ -215,10 +247,14 @@ async function main() {
   for (const batchSize of [8, 16, 32, 64, 120]) {
     batches.push(await measureBatchSize(batchSize, keys, "de"));
   }
+  const glossaries = [];
+  for (const size of [0, 50, 200, 500]) {
+    glossaries.push(await measureGlossarySize(size, 100, "de"));
+  }
   const locales = ["de", "es", "fr"];
   const prefix = await measureCrossLocalePrefix(locales, { productionLike: false });
   const productionPrefix = await measureCrossLocalePrefix(locales, { productionLike: true });
-  const report = { batches, keys, prefix, productionPrefix };
+  const report = { batches, glossaries, keys, prefix, productionPrefix };
 
   if (json) {
     console.log(JSON.stringify(report, null, 2));
@@ -232,6 +268,13 @@ async function main() {
       `${String(row.batchSize).padStart(5)}   ${String(row.calls).padStart(5)}   ` +
         `${String(row.systemPromptTokens).padStart(13)}   ` +
         `${String(row.promptOverheadTokensPerKey).padStart(19)}   ${String(row.totalTokensPerKey).padStart(16)}`,
+    );
+  }
+  console.log("\nglossary terms the batch does not use, 100 keys per call");
+  console.log("terms   system prompt   total tokens/key");
+  for (const row of glossaries) {
+    console.log(
+      `${String(row.glossaryTerms).padStart(5)}   ${String(row.systemPromptTokens).padStart(13)}   ${String(row.totalTokensPerKey).padStart(16)}`,
     );
   }
   console.log(`\nprefix caching (needs >= ${PREFIX_CACHE_MINIMUM_TOKENS} tokens of exact prefix)`);

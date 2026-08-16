@@ -103,13 +103,31 @@ export function isLegacyAcceptanceMigrationExempt(args: {
   );
 }
 
+/**
+ * Same reasoning as the normalization cache in `policies.ts`: a run digests the
+ * same resolved context once per entry, and stringifying plus hashing it is the
+ * expensive half. Keyed on the normalized object, so two different inputs that
+ * normalize to the same value still share an entry.
+ */
+const contextDigests = new WeakMap<TranslationContext, string>();
+const EMPTY_CONTEXT_DIGEST = digestValue("");
+
 export function digestTranslationContext(
   context: TranslationContext | undefined
 ): string {
   const normalized = normalizeTranslationContext(context);
-  return digestValue(
-    normalized === undefined ? "" : JSON.stringify(normalized)
-  );
+  if (normalized === undefined) {
+    return EMPTY_CONTEXT_DIGEST;
+  }
+
+  const cached = contextDigests.get(normalized);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const digest = digestValue(JSON.stringify(normalized));
+  contextDigests.set(normalized, digest);
+  return digest;
 }
 
 export function digestTranslationInstructions(args: {

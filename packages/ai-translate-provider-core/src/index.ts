@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { isSemanticallySubstantiveEvidenceSpan } from "@ai-translate/core/audit";
+import { selectRelevantGlossaryTerms } from "@ai-translate/core/candidate-cache";
 import { mergeTranslationContexts, normalizeTranslationContext } from "@ai-translate/core/policies";
 import { tokenizeText, validateTokenParity } from "@ai-translate/core/tokens";
 import type {
@@ -10,6 +11,7 @@ import type {
   SemanticAuditProvider,
   SemanticAuditRequest,
   SemanticAuditResponse,
+  TranslationCandidateCacheIdentity,
   TranslationConstraint,
   TranslationContentRole,
   TranslationContext,
@@ -1491,9 +1493,21 @@ async function runWithConcurrency<T, TResult>(
   return results;
 }
 
+/**
+ * Caps how many transport calls are in flight across every concurrent
+ * `translate` on one provider instance, so the ceiling is the provider's rate
+ * limit rather than however many batches the engine happened to dispatch.
+ *
+ * Waiters are dequeued through a moving cursor rather than `Array#shift`, which
+ * copies the remaining queue on every release: at a few waiters that is
+ * invisible, but a run configured for thousands of concurrent requests queues
+ * thousands, and paying a copy of the whole queue per completed call turns the
+ * limiter itself into the slow part.
+ */
 class RequestLimiter {
   private activeRequests = 0;
   private readonly pending: (() => void)[] = [];
+  private pendingCursor = 0;
 
   constructor(private readonly maximum: number) {}
 
@@ -1522,7 +1536,21 @@ class RequestLimiter {
 
   private release(): void {
     this.activeRequests -= 1;
-    this.pending.shift()?.();
+    const next = this.pending[this.pendingCursor];
+    if (next === undefined) {
+      this.pending.length = 0;
+      this.pendingCursor = 0;
+      return;
+    }
+
+    this.pendingCursor += 1;
+    // A queue that never fully drains would otherwise retain every waiter it
+    // has ever served, so drop the served prefix once it dominates the queue.
+    if (this.pendingCursor > 1024 && this.pendingCursor * 2 >= this.pending.length) {
+      this.pending.splice(0, this.pendingCursor);
+      this.pendingCursor = 0;
+    }
+    next();
   }
 }
 
@@ -2275,6 +2303,37 @@ function buildGlossarySection(glossary?: readonly GlossaryTerm[]): string {
     .join("\n")}`;
 }
 
+/**
+ * Narrows a project glossary to the terms some source text in this batch
+ * actually contains.
+ *
+ * A glossary is corpus-wide — brand names, product nouns, domain vocabulary —
+ * while a batch is a hundred strings. Sending all of it to every batch makes
+ * the bill scale with the glossary rather than with the work: measured at 100
+ * keys per call, going from no glossary to 500 terms takes input from 11.4 to
+ * 95.7 tokens per key, and none of those terms apply to the strings in the
+ * request.
+ *
+ * The predicate is the one `selectRelevantGlossaryTerms` already uses to decide
+ * whether a term belongs in a candidate's cache key, so this makes the prompt
+ * agree with what the cache has always claimed: a term absent from the source
+ * did not shape the translation. Order follows the configured glossary, not
+ * request order, so the same batch renders the same prompt however it was
+ * assembled.
+ */
+function selectBatchGlossary(
+  batch: ProviderBatch,
+  glossary?: readonly GlossaryTerm[],
+): readonly GlossaryTerm[] | undefined {
+  if (glossary === undefined || glossary.length === 0) {
+    return glossary;
+  }
+  const relevant = new Set(
+    batch.flatMap((request) => selectRelevantGlossaryTerms(request.sourceText, glossary)),
+  );
+  return relevant.size === glossary.length ? glossary : glossary.filter((term) => relevant.has(term));
+}
+
 const CONTENT_ROLE_GUIDANCE: Readonly<Record<TranslationContentRole, string>> = {
   body: "Write fluent native-language prose. Preserve meaning, evidence, qualifiers, citations, and structure; do not compress it merely to mirror English character length.",
   cta: "Use a short, idiomatic action phrase that preserves the exact action and commitment level.",
@@ -2843,6 +2902,10 @@ export const TRANSLATION_OUTPUT_CONTRACT_MATERIAL: TranslationOutputContractMate
     ].map((value) => value.toString()),
     prompt: [
       buildGlossarySection,
+      // Which glossary terms reach the model is a generation input, not a
+      // transport detail: tightening the predicate (word boundaries, stemming)
+      // would change output for terms that only match loosely today.
+      selectBatchGlossary,
       buildContentRoleSection,
       contentRoleLengthContract,
       buildSystemPrompt,
@@ -3101,6 +3164,13 @@ function protectedAssemblyFailureReason(
 }
 
 export class StructuredTranslationProvider implements TranslationProvider {
+  /**
+   * Reported so a config can turn the candidate cache on without restating the
+   * model and vendor this provider was constructed with. The revision is the
+   * generation contract, so a prompt or schema change that alters output
+   * invalidates the cache rather than serving the previous contract's answers.
+   */
+  readonly candidateCacheIdentity: TranslationCandidateCacheIdentity;
   private readonly batchSize: number;
   private readonly concurrentRequests: number;
   private readonly maxCharsPerBatch: number;
@@ -3154,6 +3224,11 @@ export class StructuredTranslationProvider implements TranslationProvider {
     this.requestLimiter = new RequestLimiter(this.concurrentRequests);
     this.systemPrompt = options.systemPrompt;
     this.temperature = options.temperature;
+    this.candidateCacheIdentity = {
+      modelId: this.model,
+      providerId: options.transport.label,
+      providerRevision: TRANSLATION_OUTPUT_CONTRACT_REVISION,
+    };
   }
 
   async translate(args: {
@@ -3238,6 +3313,7 @@ export class StructuredTranslationProvider implements TranslationProvider {
         protectRequestText(request, mergeTranslationContexts(args.batchContext, request.context)),
       ]),
     );
+    const batchGlossary = selectBatchGlossary(args.batch, args.glossary);
     const systemPrompt = buildSystemPrompt(
       args.locale,
       {
@@ -3255,7 +3331,7 @@ export class StructuredTranslationProvider implements TranslationProvider {
         hasRepairRequests,
         hasRequestSpecificContext,
         hasSelfCheckPlans: args.batch.some((request) => request.selfCheckPlans !== undefined),
-        ...(args.glossary === undefined ? {} : { glossary: args.glossary }),
+        ...(batchGlossary === undefined ? {} : { glossary: batchGlossary }),
         contentRoles: args.batch.flatMap((request) =>
           request.contentRole === undefined ? [] : [request.contentRole],
         ),

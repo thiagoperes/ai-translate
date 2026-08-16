@@ -77,6 +77,10 @@ Two things move the total more than the rate card does:
 
 Prompt caching is not a meaningful lever here. The only prefix shared across calls is the system prompt, which is roughly a tenth of input tokens once amortised across a batch, and input is the cheaper half of the bill.
 
+A glossary costs nothing it does not earn. Each call carries only the terms that appear in the strings it is translating, so a 500-term glossary and no glossary at all bill the same for a batch that uses neither — 16.6 tokens per key at 100 keys per call, against 95.7 if all 500 terms rode along.
+
+Repeated source text is worth paying for once. State stops a pointer being retranslated; the [candidate cache](packages/ai-translate-cli/README.md#reusing-translations-across-documents) stops the same English string being translated twice because it appears in two files. It is two lines of config and keys itself on the model your provider reports, so switching models invalidates it rather than serving the old one's output.
+
 Token counts are measured by capturing the payloads the provider actually sends at stock defaults, the same method as [`bench/prompt.bench.mjs`](bench/prompt.bench.mjs), rather than estimated from the prompt source. Prices are the published rate cards as of 2026-08-07 and will drift; re-check them before quoting a budget.
 
 ## Install
@@ -122,7 +126,7 @@ Create `ai-translate.config.ts` in your project root:
 
 ```ts
 import { defineConfig } from "@ai-translate/cli";
-import { createNamespaceJsonCatalog, createJsonStateStore } from "@ai-translate/fs-json";
+import { createNamespaceJsonCatalog, createShardedJsonStateStore } from "@ai-translate/fs-json";
 import { createOpenAiTranslationProvider } from "@ai-translate/provider-openai";
 
 export default defineConfig({
@@ -137,7 +141,7 @@ export default defineConfig({
     }),
   ],
 
-  state: createJsonStateStore({ rootDir: process.cwd() }),
+  state: createShardedJsonStateStore({ rootDir: process.cwd() }),
 
   provider: createOpenAiTranslationProvider({
     apiKey: process.env.OPENAI_API_KEY,
@@ -171,7 +175,9 @@ provider: createAiSdkTranslationProvider({
 
 Both packages are thin transports over the same engine in [`@ai-translate/provider-core`](packages/ai-translate-provider-core), so the generation contract, the repair loop, and the accepted-translation bookkeeping behave identically whichever you pick. Bringing your own vendor means implementing one method, `StructuredCompletionTransport.complete`.
 
-With `content/messages/en/*.json` in place, run `npx ai-translate sync`. Translated files land next to the source (`content/messages/de/*.json`) and state is written to `.ai-translate/`. Commit both — the state file is what makes the next run cheap.
+With `content/messages/en/*.json` in place, run `npx ai-translate sync`. Translated files land next to the source (`content/messages/de/*.json`) and state is written to `.ai-translate/`. Commit both — the state is what makes the next run cheap.
+
+State is written as one small file per document, so it stays reviewable and stays inside what a repository will accept: 1.5M records across 5,000 documents is 255 MB spread over 5,000 files, none larger than 0.1 MB, and a run that changes one document rewrites exactly one of them. `createJsonStateStore` keeps everything in a single file instead, which is simpler for a small project but reaches 183 MB at 247k records — past what GitHub will accept in a push — so it refuses to write a file that large rather than let you discover it at push time.
 
 Then wire the gate into CI:
 
@@ -221,14 +227,58 @@ Need a different format, a different model, or a different i18n library? `Catalo
 5. Queued entries are batched per locale and sent to the provider, with any glossary terms and context rules that apply.
 6. Candidates are validated, optionally audited, and written atomically. State is updated in the same transaction.
 
+## What a steady-state run costs
+
+The first pass pays the model for everything. Every run after it pays the engine
+to work out what *not* to translate, and that has to stay cheap as the corpus
+grows. Measured on 500 documents across 4 locales (40,000 entries) against a
+provider with no latency, so only engine time shows:
+
+| Run | Time | Sent to the model |
+| --- | --- | --- |
+| First pass | 1497ms | 40,000 entries |
+| No-op sync | 719ms | nothing |
+| `check` (read-only CI gate) | 450ms | nothing |
+| One string edited in 5 documents | 689ms | 400 entries |
+| One key deleted from 5 documents | 640ms | nothing |
+
+Per-entry cost holds from 40,000 to 320,000 entries, so the shape is linear.
+A no-op run also writes nothing: state files are left byte-identical, so `git
+status` stays clean and a one-document edit arrives as a diff touching that
+document, its translations, and one state file — not the whole corpus.
+
+## Scaling a run
+
+Two limits decide throughput, and the lower one wins: `concurrency.documents`
+(default 4) bounds how many documents the engine works on at once — every local
+phase, from reading sources to writing results — and the provider's
+`concurrentRequests` (default 6) bounds how many requests reach the model. Raise
+both; raising one alone moves the bottleneck rather than removing it. A single
+run can override the first with `--concurrency <n>`.
+
+On 800 source documents across 4 locales, going from 1 to 64 takes a sync from
+15.2s to 2.5s of engine time. See the [CLI README](packages/ai-translate-cli/README.md#concurrency)
+for how the two interact.
+
 ## Benchmarks
 
-Space, memory, and token cost are measured against both synthetic and real corpora, with a baseline guard in CI so a regression fails the build:
+Space, memory, token cost, and throughput are measured against both synthetic and real corpora, with a baseline guard in CI so a regression fails the build:
 
 ```bash
 pnpm bench           # measure
 pnpm bench:baseline  # record a baseline
 pnpm bench:check     # fail on regression
+```
+
+`bench/throughput.bench.mjs` reports where a sync's wall clock goes — catalog
+scan, document write, state load and write — against a provider of known latency,
+so an engine-side regression is visible separately from model time.
+`bench/lifecycle.bench.mjs` reports the cost of each kind of run: first pass,
+no-op, delta, removal, and `check`.
+
+```bash
+node bench/throughput.bench.mjs --documents 800 --locales 4 --concurrency 64
+node bench/lifecycle.bench.mjs --documents 500 --locales 4
 ```
 
 ## Development

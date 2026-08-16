@@ -23,11 +23,18 @@ import {
   type DurableTransactionFaultPoint,
   type DurableTransactionStateStore,
 } from "./durable-transaction";
-import { fileExists, readJsonFile } from "./shared";
+import { fileExists, readJsonFile, serializeStateFile } from "./shared";
 
 interface ShardedJsonStateStoreOptions {
   legacyStateFileName?: string;
   lockFileName?: string;
+  /**
+   * Largest shard to write, defaulting to 40 MiB. Sharding normally keeps files
+   * far below that, but a shard holds every locale of one document unit, so a
+   * single enormous document can still produce a file no repository will take.
+   * Raise it, or pass `Infinity`, when state is not committed.
+   */
+  maxFileBytes?: number;
   retryDelayMs?: number;
   rootDir: string;
   shardsDir?: string;
@@ -199,8 +206,22 @@ function decodeCompactString(value: unknown): string | null {
   return null;
 }
 
+/**
+ * Canonical `Date#toISOString` output, which is the only shape that survives the
+ * round trip to a number and back. Checking the shape with a pattern rather than
+ * reformatting a `Date` matters because this runs once per record on every save:
+ * building and formatting a throwaway `Date` for each was among the most
+ * expensive things a no-op save did.
+ */
+const ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
+
 function packTimestamp(value: string): PackedTimestamp {
+  if (!ISO_TIMESTAMP_PATTERN.test(value)) {
+    return value;
+  }
   const timestamp = Date.parse(value);
+  // A shape-valid but impossible date (month 13) parses to NaN, and one outside
+  // the representable range is not a safe integer.
   return Number.isSafeInteger(timestamp) && new Date(timestamp).toISOString() === value
     ? timestamp
     : value;
@@ -1077,7 +1098,38 @@ async function waitForStateMutations(
   }
 }
 
-async function writeCompactJsonFileAtomic(filePath: string, value: unknown): Promise<void> {
+/**
+ * Rewrites a shard only when its bytes would change.
+ *
+ * Most runs change a handful of units and leave the rest of the corpus exactly
+ * as it was, but a save repacks and rewrites every shard regardless. That costs
+ * two fsyncs and a rename per untouched file, and it touches the mtime of files
+ * a reviewer can see are unchanged. Comparing against what is already on disk is
+ * one read against that, and it is what makes a no-op run genuinely a no-op.
+ */
+async function writeCompactJsonFileAtomic(
+  filePath: string,
+  value: unknown,
+  maxFileBytes?: number,
+): Promise<void> {
+  /*
+   * Sharding keeps files small by splitting on document unit, which stops
+   * working when one unit is enormous: a shard holds every locale of its unit,
+   * so a single 60k-pointer document across 15 locales reaches 150 MiB on its
+   * own and no amount of sharding spreads it.
+   */
+  const contents = serializeStateFile({
+    advice:
+      "A shard holds every locale of one document unit, so split that document into smaller units.",
+    filePath,
+    ...(maxFileBytes === undefined ? {} : { maxBytes: maxFileBytes }),
+    pretty: false,
+    value,
+  });
+  if (await fileContentMatches(filePath, contents)) {
+    return;
+  }
+
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const tempPath = path.join(
     path.dirname(filePath),
@@ -1086,7 +1138,7 @@ async function writeCompactJsonFileAtomic(filePath: string, value: unknown): Pro
   let handle: fs.FileHandle | undefined;
   try {
     handle = await fs.open(tempPath, "wx");
-    await handle.writeFile(`${JSON.stringify(value)}\n`, "utf8");
+    await handle.writeFile(contents, "utf8");
     await handle.sync();
     await handle.close();
     handle = undefined;
@@ -1100,6 +1152,16 @@ async function writeCompactJsonFileAtomic(filePath: string, value: unknown): Pro
   } finally {
     await handle?.close();
     await fs.rm(tempPath, { force: true });
+  }
+}
+
+async function fileContentMatches(filePath: string, contents: string): Promise<boolean> {
+  try {
+    return (await fs.readFile(filePath, "utf8")) === contents;
+  } catch {
+    // Missing, unreadable, or racing with another writer: fall through and write,
+    // which is the outcome that cannot lose data.
+    return false;
   }
 }
 
@@ -1182,6 +1244,7 @@ async function writeShardFiles(
   shardsDir: string,
   snapshot: SyncStateSnapshot,
   scope?: SyncStateLoadScope,
+  maxFileBytes?: number,
 ): Promise<void> {
   const groups = groupEntriesByShard(snapshot);
   const existingShards = new Set(await listShardFiles(shardsDir));
@@ -1202,7 +1265,7 @@ async function writeShardFiles(
           : (groups.get(shardPath) ?? null);
         await (merged === null
           ? fs.rm(absolute, { force: true })
-          : writeCompactJsonFileAtomic(absolute, packShard(merged)));
+          : writeCompactJsonFileAtomic(absolute, packShard(merged), maxFileBytes));
       }),
       "Failed to write ai-translate state shards.",
     );
@@ -1216,7 +1279,7 @@ async function writeShardFiles(
   await waitForStateMutations(
     [...groups.entries()].map(async ([shardPath, shard]) => {
       const absolute = path.join(shardsDir, shardPath);
-      await writeCompactJsonFileAtomic(absolute, packShard(shard));
+      await writeCompactJsonFileAtomic(absolute, packShard(shard), maxFileBytes);
       existingShards.delete(shardPath);
     }),
     "Failed to write ai-translate state shards.",
@@ -1274,6 +1337,15 @@ function projectSnapshotLocales(
   return { entries, version: snapshot.version };
 }
 
+/**
+ * Shards read at once while loading state. Loading is the first thing a run
+ * does and nothing can start until it finishes, so a shard at a time would put
+ * a full read latency between the run and its first translation for every unit
+ * in the corpus. Bounded because a large corpus has thousands of shards and
+ * opening them all at once would exhaust the process's file descriptors.
+ */
+const SHARD_READ_CONCURRENCY = 32;
+
 async function loadFromShards(
   shardsDir: string,
   scope?: SyncStateLoadScope,
@@ -1282,25 +1354,34 @@ async function loadFromShards(
   const entries: Record<string, SyncStateEntry> = {};
   const context = createShardLoadContext(scope);
 
-  for (const relativePath of shardFiles) {
-    const absolutePath = path.join(shardsDir, relativePath);
-    const shard = await readShard(absolutePath);
-    if (!shard) {
-      continue;
-    }
+  // Read in file order so a conflicting-record error names the same shard on
+  // every run, however the reads interleave.
+  for (let index = 0; index < shardFiles.length; index += SHARD_READ_CONCURRENCY) {
+    const batch = await Promise.all(
+      shardFiles.slice(index, index + SHARD_READ_CONCURRENCY).map(async (relativePath) => {
+        const absolutePath = path.join(shardsDir, relativePath);
+        return { absolutePath, shard: await readShard(absolutePath) };
+      }),
+    );
 
-    for (const [key, entry] of Object.entries(
-      loadEntriesFromShard(shard, absolutePath, context),
-    )) {
-      const existing = entries[key];
-      if (existing === undefined) {
-        entries[key] = entry;
+    for (const { absolutePath, shard } of batch) {
+      if (!shard) {
         continue;
       }
-      if (JSON.stringify(existing) !== JSON.stringify(entry)) {
-        throw new Error(
-          `Conflicting ai-translate shard records for ${key}; remove or reconcile duplicate legacy and canonical shards.`,
-        );
+
+      for (const [key, entry] of Object.entries(
+        loadEntriesFromShard(shard, absolutePath, context),
+      )) {
+        const existing = entries[key];
+        if (existing === undefined) {
+          entries[key] = entry;
+          continue;
+        }
+        if (JSON.stringify(existing) !== JSON.stringify(entry)) {
+          throw new Error(
+            `Conflicting ai-translate shard records for ${key}; remove or reconcile duplicate legacy and canonical shards.`,
+          );
+        }
       }
     }
   }
@@ -1420,7 +1501,8 @@ export function createShardedJsonStateStore(
       ? {}
       : { faultInjector: options.transactionFaultInjector }),
     journalPath,
-    saveState: (state, scope) => writeShardFiles(shardsDir, state, scope),
+    saveState: (state, scope) =>
+      writeShardFiles(shardsDir, state, scope, options.maxFileBytes),
     transactionsDir,
   });
 
@@ -1438,7 +1520,7 @@ export function createShardedJsonStateStore(
       return  loadFromShards(shardsDir, scope);
     },
     async save(state, scope) {
-      await writeShardFiles(shardsDir, state, scope);
+      await writeShardFiles(shardsDir, state, scope, options.maxFileBytes);
     },
     async withLock(operation) {
       await fs.mkdir(path.dirname(lockPath), { recursive: true });

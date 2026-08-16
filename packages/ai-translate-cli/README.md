@@ -39,6 +39,46 @@ export default defineConfig({
 
 The full config surface is documented as types in [`@ai-translate/core`](../ai-translate-core), on the `AiTranslateConfig` interface.
 
+### Reusing translations across documents
+
+State makes a run skip work it has already done for *this* pointer in *this*
+locale. The candidate cache is what stops you paying twice for the same English
+string appearing in two places — a shared button label, a repeated heading, a
+paragraph that moved between files. It is off by default and takes two settings:
+
+```ts
+import { createFileTranslationCandidateCache } from "@ai-translate/fs-json";
+import { TRANSLATION_OUTPUT_CONTRACT_REVISION } from "@ai-translate/provider-openai";
+
+export default defineConfig({
+  // ...
+  generationRevision: TRANSLATION_OUTPUT_CONTRACT_REVISION,
+  candidateCache: {
+    store: createFileTranslationCandidateCache({ rootDir: process.cwd() }),
+  },
+});
+```
+
+`generationRevision` states which generation contract your stored translations
+came from, so a prompt or schema change that alters output retranslates instead
+of being served from cache. Pinning it to the provider's exported contract
+revision keeps that automatic.
+
+Nothing else is needed: the cache keys itself on the model and vendor the
+provider reports, so changing `model` invalidates the cache on its own rather
+than quietly serving the previous model's output. Set `candidateCache.identity`
+only for a custom provider that cannot report one.
+
+The cache writes one file per candidate at roughly 900 bytes, so a small project
+can commit `.ai-translate/candidate-cache/` and share hits across CI runs. Do not
+commit it at scale: a million candidates is a million files and over a gigabyte,
+which no repository handles well. Add it to `.gitignore` and restore it between
+CI runs with your runner's cache instead — it is derived data, and a cold cache
+costs model calls rather than correctness.
+
+State is the opposite: it is small, it is the record of what is current, and it
+belongs in the repository.
+
 ### Environment variables
 
 Before every command the CLI loads, in order and without overriding anything already set in the environment:
@@ -170,6 +210,7 @@ ai-translate adopt
 | `--force-retranslate` | sync | Retranslate the selected scope even when state is current. |
 | `--force-retranslate-path <pointer>` | sync | Force retranslation of specific pointers. Repeatable. |
 | `--max-pending-translations <n>` | sync, check | Abort before any provider call if the scope would translate more than `n` entries. |
+| `--concurrency <n>` | sync, check, audit, validate | Documents to work on at once, overriding `concurrency.documents`. See [Concurrency](#concurrency). |
 | `--check` | audit | Verify stored provenance without calling the provider. |
 | `--refresh` | audit | Re-run audits even where provenance already exists. |
 | `--from <locale>` | new-locale, scaffold-locale | Locale to seed from. |
@@ -179,6 +220,36 @@ ai-translate adopt
 | `--version`, `-v` | | Print the version. |
 
 Flags accept both `--locale de` and `--locale=de`.
+
+## Concurrency
+
+Two separate limits decide how fast a run goes, and the lower one wins.
+
+**How many documents the engine works on at once** — `concurrency.documents` in
+the config, or `--concurrency <n>` for a single run. Defaults to 4. This governs
+everything the run does locally: reading sources, reconciling targets, preparing
+entries, dispatching batches, writing results. It is the number to raise on a
+large corpus, where the run spends most of its time on file I/O.
+
+**How many requests reach the model at once** — `concurrentRequests` on the
+provider. Defaults to 6, and is shared across every batch in flight:
+
+```ts
+provider: createOpenAiTranslationProvider({
+  apiKey: process.env.OPENAI_API_KEY,
+  concurrentRequests: 64,
+  model: "gpt-5.6-luna",
+}),
+```
+
+Raising only the first will not push more work through the model, and raising
+only the second will not help a run still reading one file at a time. Pick the
+provider number against your rate limit and the document number against your
+disk, and raise both.
+
+Note that a state store's lock is held for the whole run, so two syncs cannot
+share one `.ai-translate` directory concurrently. Split large jobs by locale
+across separate checkouts rather than separate processes.
 
 ## Output and exit codes
 

@@ -9,10 +9,17 @@ import type {
   SyncStateStore,
 } from "@ai-translate/core/types";
 
-import { readJsonFile, writeJsonFileAtomic } from "./shared";
+import { readJsonFile, serializeStateFile, writeJsonFileAtomic } from "./shared";
 
 interface JsonStateStoreOptions {
   lockFileName?: string;
+  /**
+   * Largest state file to write, defaulting to 40 MiB. State is normally
+   * committed and GitHub rejects a push containing a file over 100 MiB, so a
+   * save that would cross the line fails while the run can still be rolled
+   * back. Raise it, or pass `Infinity`, when state is not committed.
+   */
+  maxFileBytes?: number;
   retryDelayMs?: number;
   rootDir: string;
   stateDir?: string;
@@ -112,8 +119,27 @@ export function createJsonStateStore(
       return normalizeStateSnapshot(state);
     },
     async save(state) {
+      const normalized = normalizeStateSnapshot(state);
+      /*
+       * Serialized up front purely to enforce the size limit before anything is
+       * written. One file for the whole corpus is the fastest way to a blob no
+       * repository will take: a 247k-record corpus lands at 183 MiB, and past
+       * roughly a million records the JSON string exceeds what V8 can hold at
+       * all. This store stays the simple choice for small projects and says so
+       * rather than failing at push time.
+       */
+      serializeStateFile({
+        advice:
+          "Switch to createShardedJsonStateStore, which writes one small file per document unit.",
+        filePath: statePath,
+        ...(options.maxFileBytes === undefined
+          ? {}
+          : { maxBytes: options.maxFileBytes }),
+        pretty: true,
+        value: normalized,
+      });
       await ensureDirectory(statePath);
-      await writeJsonFileAtomic(statePath, normalizeStateSnapshot(state));
+      await writeJsonFileAtomic(statePath, normalized);
     },
     async withLock(operation) {
       await ensureDirectory(lockPath);

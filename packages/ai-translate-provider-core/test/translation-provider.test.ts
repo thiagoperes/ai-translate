@@ -576,6 +576,41 @@ describe("TestTranslationProvider", () => {
     expect(results.flat().map(({ key }) => key)).toEqual(keys);
   });
 
+  it("admits queued requests in arrival order at a large backlog", async () => {
+    const admitted: string[] = [];
+    const { transport } = createMockTransport(async (args) => {
+      const messages = args.messages as readonly { content: string; role: string }[];
+      const payload = JSON.parse(messages[1]?.content ?? "{}") as {
+        requests: readonly { key: string }[];
+      };
+      const key = payload.requests[0]?.key ?? "missing";
+      admitted.push(key);
+      await new Promise((resolve) => { setTimeout(resolve, 0); });
+      return {
+        choices: [{ message: { parsed: { translations: [{ key, translation: "Hallo" }] } } }],
+      };
+    });
+    const provider = new TestTranslationProvider({
+      batchSize: 1,
+      transport,
+      concurrentRequests: 2,
+      maxRetries: 1,
+    });
+    // Deep enough that a queue served by anything other than a stable cursor
+    // would reorder or drop waiters, and deep enough to exercise reclaiming the
+    // served prefix rather than growing the queue for the provider's lifetime.
+    const keys = Array.from({ length: 3000 }, (_unused, index) => `key-${String(index)}`);
+
+    const results = await Promise.all(
+      keys.map((key) =>
+        provider.translate({ locale: "de", requests: [createRequest(key, "Hello")] }),
+      ),
+    );
+
+    expect(admitted).toEqual(keys);
+    expect(results.flat().map(({ key }) => key)).toEqual(keys);
+  });
+
   it("drains active requests, preserves completed batches, and abandons queued work", async () => {
     let activeRequests = 0;
     let activeAtResolution = -1;
@@ -735,7 +770,7 @@ describe("TestTranslationProvider", () => {
     expect(result).toHaveLength(2);
   });
 
-  it("builds the default prompt, includes glossary terms, and forwards the request payload", async () => {
+  it("builds the default prompt, includes the batch's glossary terms, and forwards the request payload", async () => {
     const { transport, parse } = createMockTransport(() => ({
       choices: [
         {
@@ -761,7 +796,7 @@ describe("TestTranslationProvider", () => {
 
     const result = await provider.translate({
       glossary: [
-        { note: "Do not translate the brand name.", source: "Rally", target: "Rally" },
+        { note: "Do not translate the brand name.", source: "team", target: "team" },
         { source: "driver", target: "pilote" },
       ],
       locale: "fr-FR",
@@ -813,8 +848,11 @@ describe("TestTranslationProvider", () => {
     expect(request.messages[0]?.content).toContain("Keep the brand slogan in English.");
     expect(request.messages[0]?.content).toContain("Do not omit, merge, or deduplicate entries.");
     expect(request.messages[0]?.content).toContain(
-      'Glossary terms that must be respected:\n- "Rally" => "Rally" (Do not translate the brand name.)\n- "driver" => "pilote"',
+      'Glossary terms that must be respected:\n- "team" => "team" (Do not translate the brand name.)',
     );
+    // "driver" appears in no source string in this batch, so instructing the
+    // model about it would cost tokens on every call and change nothing.
+    expect(request.messages[0]?.content).not.toContain("pilote");
 
     const payload: unknown = JSON.parse(request.messages[1]?.content ?? "{}");
     expect(payload).toEqual({
@@ -1734,10 +1772,10 @@ describe("TestTranslationProvider", () => {
     expect(request.messages[1]?.content).toContain('"locale":"nl"');
   });
 
-  it("passes glossary terms to custom prompt builders", async () => {
+  it("passes the batch's glossary terms to custom prompt builders", async () => {
     const customPrompt = vi.fn(() => "Use approved fuel terms.");
     const glossary = [
-      { source: "fuel card", target: "carte carburant" },
+      { source: "Hello", target: "Bonjour" },
     ] satisfies readonly GlossaryTerm[];
     const { transport } = createMockTransport(() => ({
       choices: [
@@ -1771,6 +1809,102 @@ describe("TestTranslationProvider", () => {
       hasRequestSpecificContext: false,
       locale: "fr",
     });
+  });
+
+  it("keeps a corpus-wide glossary out of batches that use none of it", async () => {
+    const { transport, parse } = createMockTransport((args) => {
+      const messages = args.messages as readonly { content: string; role: string }[];
+      const payload = JSON.parse(messages[1]?.content ?? "{}") as {
+        requests: readonly { key: string }[];
+      };
+      return {
+        choices: [
+          {
+            message: {
+              parsed: {
+                translations: payload.requests.map(({ key }) => ({ key, translation: "Hallo" })),
+              },
+            },
+          },
+        ],
+      };
+    });
+    const provider = new TestTranslationProvider({ batchSize: 10, maxRetries: 1, transport });
+    const glossary: readonly GlossaryTerm[] = Array.from({ length: 200 }, (_unused, index) => ({
+      source: `unused-term-${String(index)}`,
+      target: `Begriff-${String(index)}`,
+    }));
+
+    await provider.translate({
+      glossary,
+      locale: "de",
+      requests: [createRequest("headline", "Hello")],
+    });
+
+    const [withoutGlossary] = parse.mock.calls.map(
+      ([request]) => request.messages[0]?.content ?? "",
+    );
+    expect(withoutGlossary).not.toContain("Glossary terms that must be respected");
+
+    parse.mockClear();
+    await provider.translate({
+      glossary: [...glossary, { source: "Hello", target: "Hallo" }],
+      locale: "de",
+      requests: [createRequest("headline", "Hello")],
+    });
+
+    const [withGlossary] = parse.mock.calls.map(
+      ([request]) => request.messages[0]?.content ?? "",
+    );
+    expect(withGlossary).toContain('Glossary terms that must be respected:\n- "Hello" => "Hallo"');
+    expect(withGlossary).not.toContain("unused-term-0");
+  });
+
+  it("selects glossary terms per batch rather than per translate call", async () => {
+    const glossarySections: string[] = [];
+    const { transport } = createMockTransport((args) => {
+      const messages = args.messages as readonly { content: string; role: string }[];
+      const system = messages[0]?.content ?? "";
+      glossarySections.push(
+        system
+          .split("\n")
+          .filter((line) => line.startsWith('- "'))
+          .join("\n"),
+      );
+      const payload = JSON.parse(messages[1]?.content ?? "{}") as {
+        requests: readonly { key: string }[];
+      };
+      return {
+        choices: [
+          {
+            message: {
+              parsed: {
+                translations: payload.requests.map(({ key }) => ({ key, translation: "Hallo" })),
+              },
+            },
+          },
+        ],
+      };
+    });
+    // One request per call, so each batch sees only its own source text.
+    const provider = new TestTranslationProvider({ batchSize: 1, maxRetries: 1, transport });
+
+    await provider.translate({
+      glossary: [
+        { source: "deployment", target: "Bereitstellung" },
+        { source: "workspace", target: "Arbeitsbereich" },
+      ],
+      locale: "de",
+      requests: [
+        createRequest("a", "Your workspace is ready."),
+        createRequest("b", "The deployment finished."),
+      ],
+    });
+
+    expect(glossarySections.toSorted()).toEqual([
+      '- "deployment" => "Bereitstellung"',
+      '- "workspace" => "Arbeitsbereich"',
+    ]);
   });
 
   it("forwards batch context and batch key through public translation calls", async () => {

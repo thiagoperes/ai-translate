@@ -13,7 +13,11 @@ import {
   makeLegacyStateKey,
   makeStateKey,
 } from "./address";
-import { createTranslationCandidateCacheKey } from "./candidate-cache";
+import {
+  createTranslationCandidateCacheKey,
+  resolveCandidateCacheIdentity,
+} from "./candidate-cache";
+import { resolveDocumentConcurrency, runWithConcurrency } from "./concurrency";
 import { digestValue } from "./hash";
 import { mapEntriesByPointer } from "./json";
 import { resolvePolicy, resolveTranslationContext } from "./policies";
@@ -251,50 +255,6 @@ function stableValue(value: unknown): unknown {
 
 export function stableStringify(value: unknown): string {
   return JSON.stringify(stableValue(value));
-}
-
-async function runWithConcurrency<T, TResult>(
-  values: readonly T[],
-  concurrency: number,
-  worker: (value: T) => Promise<TResult>
-): Promise<TResult[]> {
-  if (values.length === 0) {
-    return [];
-  }
-
-  const results: TResult[] = [];
-  let nextIndex = 0;
-  let firstError: unknown;
-  let failed = false;
-  const runWorker = async (): Promise<void> => {
-    while (!failed && nextIndex < values.length) {
-      const currentIndex = nextIndex;
-      nextIndex += 1;
-      const value = values[currentIndex];
-      if (value !== undefined) {
-        try {
-          results[currentIndex] = await worker(value);
-        } catch (error) {
-          if (!failed) {
-            failed = true;
-            firstError = error;
-          }
-        }
-      }
-    }
-  };
-  const workers = Array.from(
-    { length: Math.min(values.length, Math.max(1, concurrency)) },
-    () => runWorker()
-  );
-  await Promise.all(workers);
-  if (failed) {
-    // Rethrown verbatim: wrapping it would replace the original error and its
-    // stack with a stringified copy.
-    // oxlint-disable-next-line no-throw-literal
-    throw firstError;
-  }
-  return results;
 }
 
 function resolveCatalogs(
@@ -855,269 +815,316 @@ async function collectCandidates(
   const retirements: AuditRetirement[] = [];
   const configuredAuditIds = new Set(audits.map(({ id }) => id));
   const requestedUnits = options.unitIds ? new Set(options.unitIds) : undefined;
-  const matchedUnits = new Set<string>();
-  for (const catalog of resolveCatalogs(config, options)) {
-    const refs = await catalog.listDocumentRefs(config.sourceLocale);
-    for (const sourceRef of refs) {
-      if (requestedUnits && !requestedUnits.has(sourceRef.unitId)) {
-        continue;
-      }
-      matchedUnits.add(sourceRef.unitId);
+  // Consulted once per pointer per locale, so a list here would make a
+  // path-scoped audit cost the length of that list on every entry.
+  const includedPaths =
+    options.includePaths === undefined ? undefined : new Set(options.includePaths);
+  const locales = resolveLocales(config, options);
+
+  /*
+   * Every document an audit inspects is read before any of them is analyzed.
+   * Reading them one at a time makes an audit cost a round trip per document
+   * per locale, which on a large corpus dwarfs the analysis it exists to run;
+   * the reads are independent, so they share the run's document budget. The
+   * analysis below still walks documents in ref order, so which read landed
+   * first cannot change the candidates or issues an audit produces.
+   */
+  const concurrency = resolveDocumentConcurrency(config, options);
+  const sourceRequests = (
+    await Promise.all(
+      resolveCatalogs(config, options).map(async (catalog) => {
+        const refs = await catalog.listDocumentRefs(config.sourceLocale);
+        return refs
+          .filter(
+            (sourceRef) =>
+              requestedUnits === undefined ||
+              requestedUnits.has(sourceRef.unitId)
+          )
+          .map((sourceRef) => ({ catalog, sourceRef }));
+      })
+    )
+  ).flat();
+  const matchedUnits = new Set(
+    sourceRequests.map(({ sourceRef }) => sourceRef.unitId)
+  );
+
+  const loadedSources = await runWithConcurrency(
+    sourceRequests,
+    concurrency,
+    async ({ catalog, sourceRef }) => {
       const sourceDocument = await catalog.loadDocument(sourceRef);
       if (!sourceDocument) {
         throw new Error(`Missing source document at ${sourceRef.path}.`);
       }
-      const sourceEntries = mapEntriesByPointer(
-        sourceDocument,
-        addressToJsonPointer
-      );
+      return { catalog, sourceDocument, sourceRef };
+    }
+  );
 
-      for (const locale of resolveLocales(config, options)) {
-        const targetRef = catalog.createDocumentRef(sourceRef, locale);
-        const targetDocument = await catalog.loadDocument(targetRef);
-        if (!targetDocument) {
-          for (const audit of audits) {
-            issues.push({
-              auditId: audit.id,
-              catalogId: catalog.id,
-              code: "semantic-audit-missing-target-document",
-              inputDigest: digestValue(
-                stableStringify({ auditId: audit.id, locale, targetRef })
-              ),
-              jsonPointer: "",
-              locale,
-              message: `Semantic audit "${audit.id}" cannot inspect missing target document ${targetRef.path}.`,
-              path: targetRef.path,
-              severity: "error",
-              status: "missing",
-              unitId: targetRef.unitId,
-            });
+  const loadedTargets = await runWithConcurrency(
+    loadedSources.flatMap((source) =>
+      locales.map((locale) => ({ locale, source }))
+    ),
+    concurrency,
+    async ({ locale, source }) => {
+      const targetRef = source.catalog.createDocumentRef(
+        source.sourceRef,
+        locale
+      );
+      return {
+        locale,
+        source,
+        targetDocument: await source.catalog.loadDocument(targetRef),
+        targetRef,
+      };
+    }
+  );
+
+  for (const {
+    locale,
+    source: { catalog, sourceDocument, sourceRef },
+    targetDocument,
+    targetRef,
+  } of loadedTargets) {
+    const sourceEntries = mapEntriesByPointer(
+      sourceDocument,
+      addressToJsonPointer
+    );
+
+    if (!targetDocument) {
+      for (const audit of audits) {
+        issues.push({
+          auditId: audit.id,
+          catalogId: catalog.id,
+          code: "semantic-audit-missing-target-document",
+          inputDigest: digestValue(
+            stableStringify({ auditId: audit.id, locale, targetRef })
+          ),
+          jsonPointer: "",
+          locale,
+          message: `Semantic audit "${audit.id}" cannot inspect missing target document ${targetRef.path}.`,
+          path: targetRef.path,
+          severity: "error",
+          status: "missing",
+          unitId: targetRef.unitId,
+        });
+      }
+      continue;
+    }
+    const targetEntries = mapEntriesByPointer(
+      targetDocument,
+      addressToJsonPointer
+    );
+
+    for (const [pointer, sourceEntry] of sourceEntries) {
+      if (includedPaths !== undefined && !includedPaths.has(pointer)) {
+        continue;
+      }
+      const targetEntry = targetEntries.get(pointer);
+      const isTranslated =
+        resolvePolicy({
+          catalogId: catalog.id,
+          entry: sourceEntry,
+          locale,
+          unitId: sourceRef.unitId,
+          ...(config.policies === undefined ? {} : { rules: config.policies }),
+        }) === "translate";
+      if (!isTranslated || typeof sourceEntry.value !== "string") {
+        continue;
+      }
+      if (!targetEntry || typeof targetEntry.value !== "string") {
+        for (const audit of audits) {
+          issues.push({
+            auditId: audit.id,
+            catalogId: catalog.id,
+            code: targetEntry
+              ? "semantic-audit-incompatible-target-entry"
+              : "semantic-audit-missing-target-entry",
+            inputDigest: digestValue(
+              stableStringify({
+                auditId: audit.id,
+                locale,
+                pointer,
+                sourceDigest: digestValue(sourceEntry.value),
+                unitId: targetRef.unitId,
+              })
+            ),
+            jsonPointer: pointer,
+            locale,
+            message: targetEntry
+              ? `Semantic audit "${audit.id}" requires a string target at ${pointer}.`
+              : `Semantic audit "${audit.id}" cannot inspect missing target entry ${pointer}.`,
+            path: targetRef.path,
+            severity: "error",
+            status: "missing",
+            unitId: targetRef.unitId,
+          });
+        }
+        continue;
+      }
+
+      const stateRecord = findStateEntry({
+        catalogId: catalog.id,
+        locale,
+        pointer,
+        state,
+        unitId: sourceRef.unitId,
+      });
+      const sourceText = sourceEntry.value;
+      const targetText = targetEntry.value;
+      if (
+        isLegacyAcceptanceMigrationExempt({
+          config,
+          sourceText,
+          stateEntry: stateRecord.entry,
+          targetText,
+        })
+      ) {
+        continue;
+      }
+      const hasRejectedLegacyAudit = Object.values(
+        stateRecord.entry?.validationAudits ?? {}
+      ).some((audit) => audit.status !== "accepted");
+
+      const skipLegacyProviderAudit =
+        config.validation?.legacyUnverifiedSemanticPolicy ===
+          "skip-provider" &&
+        stateRecord.entry?.origin === "generated" &&
+        stateRecord.entry.status === "synced" &&
+        stateRecord.entry.sourceDigest === digestValue(sourceText) &&
+        stateRecord.entry.targetDigest === digestValue(targetText) &&
+        !hasRejectedLegacyAudit &&
+        stateRecord.entry.generationRevision ===
+          LEGACY_UNVERIFIED_GENERATION_REVISION;
+
+      const contentRole = config.contentRole?.({
+        catalogId: catalog.id,
+        entry: sourceEntry,
+        locale,
+        path: pointer,
+        unitId: sourceRef.unitId,
+      });
+      const { context, contextDigest } = resolveCurrentContext({
+        catalogId: catalog.id,
+        config,
+        contentRole,
+        entry: sourceEntry,
+        locale,
+        path: pointer,
+        unitId: sourceRef.unitId,
+      });
+      const queueRetirement = (
+        auditId: string,
+        existingAudit: SemanticAuditProvenance
+      ) => {
+        if (!stateRecord.entry) {
+          return;
+        }
+        retirements.push({
+          auditId,
+          catalog,
+          catalogId: catalog.id,
+          existingAudit,
+          existingState: stateRecord.entry,
+          locale,
+          path: targetRef.path,
+          pointer,
+          sourceRef,
+          sourceText,
+          stateKey: stateRecord.key,
+          storedStateKey: stateRecord.storedKey,
+          targetRef,
+          targetText,
+          unitId: sourceRef.unitId,
+        });
+      };
+
+      for (const [auditId, existingAudit] of Object.entries(
+        stateRecord.entry?.validationAudits ?? {}
+      )) {
+        if (!configuredAuditIds.has(auditId)) {
+          queueRetirement(auditId, existingAudit);
+        }
+      }
+
+      for (const audit of audits) {
+        const analyzerArgs = {
+          catalogId: catalog.id,
+          ...(contentRole === undefined ? {} : { contentRole }),
+          ...(context === undefined ? {} : { context }),
+          entry: sourceEntry,
+          ...(stateRecord.entry === undefined
+            ? {}
+            : { existingState: stateRecord.entry }),
+          locale,
+          path: pointer,
+          sourceText: sourceEntry.value,
+          targetText: targetEntry.value,
+          unitId: sourceRef.unitId,
+        };
+        const analysis = await audit.analyze(analyzerArgs);
+        if (!analysis || analysis.requirements.length === 0) {
+          const existingAudit =
+            stateRecord.entry?.validationAudits?.[audit.id];
+          if (existingAudit) {
+            queueRetirement(audit.id, existingAudit);
           }
           continue;
         }
-        const targetEntries = mapEntriesByPointer(
-          targetDocument,
-          addressToJsonPointer
-        );
-
-        for (const [pointer, sourceEntry] of sourceEntries) {
-          if (
-            options.includePaths !== undefined &&
-            !options.includePaths.includes(pointer)
-          ) {
-            continue;
-          }
-          const targetEntry = targetEntries.get(pointer);
-          const isTranslated =
-            resolvePolicy({
-              catalogId: catalog.id,
-              entry: sourceEntry,
-              locale,
-              unitId: sourceRef.unitId,
-              ...(config.policies === undefined
-                ? {}
-                : { rules: config.policies }),
-            }) === "translate";
-          if (!isTranslated || typeof sourceEntry.value !== "string") {
-            continue;
-          }
-          if (!targetEntry || typeof targetEntry.value !== "string") {
-            for (const audit of audits) {
-              issues.push({
-                auditId: audit.id,
-                catalogId: catalog.id,
-                code: targetEntry
-                  ? "semantic-audit-incompatible-target-entry"
-                  : "semantic-audit-missing-target-entry",
-                inputDigest: digestValue(
-                  stableStringify({
-                    auditId: audit.id,
-                    locale,
-                    pointer,
-                    sourceDigest: digestValue(sourceEntry.value),
-                    unitId: targetRef.unitId,
-                  })
-                ),
-                jsonPointer: pointer,
-                locale,
-                message: targetEntry
-                  ? `Semantic audit "${audit.id}" requires a string target at ${pointer}.`
-                  : `Semantic audit "${audit.id}" cannot inspect missing target entry ${pointer}.`,
-                path: targetRef.path,
-                severity: "error",
-                status: "missing",
-                unitId: targetRef.unitId,
-              });
-            }
-            continue;
-          }
-
-          const stateRecord = findStateEntry({
+        validateAnalysis(audit.id, analysis);
+        const inputDigest = createInputDigest({
+          analysis,
+          audit,
+          catalogId: catalog.id,
+          contextDigest,
+          locale,
+          path: pointer,
+          sourceText: sourceEntry.value,
+          targetText: targetEntry.value,
+          unitId: sourceRef.unitId,
+        });
+        const requestDigest = createRequestDigest({
+          analysis,
+          audit,
+          catalogId: catalog.id,
+          contextDigest,
+          locale,
+          path: pointer,
+          sourceText: sourceEntry.value,
+          targetText: targetEntry.value,
+          unitId: sourceRef.unitId,
+        });
+        const key = `${audit.id}:${stateRecord.key}:${requestDigest}`;
+        candidates.push({
+          analysis,
+          audit,
+          catalog,
+          contentRole,
+          context,
+          contextDigest,
+          existingState: stateRecord.entry,
+          inputDigest,
+          path: targetRef.path,
+          request: {
+            auditId: audit.id,
             catalogId: catalog.id,
-            locale,
-            pointer,
-            state,
-            unitId: sourceRef.unitId,
-          });
-          const sourceText = sourceEntry.value;
-          const targetText = targetEntry.value;
-          if (
-            isLegacyAcceptanceMigrationExempt({
-              config,
-              sourceText,
-              stateEntry: stateRecord.entry,
-              targetText,
-            })
-          ) {
-            continue;
-          }
-          const hasRejectedLegacyAudit = Object.values(
-            stateRecord.entry?.validationAudits ?? {}
-          ).some((audit) => audit.status !== "accepted");
-
-          const skipLegacyProviderAudit =
-            config.validation?.legacyUnverifiedSemanticPolicy ===
-              "skip-provider" &&
-            stateRecord.entry?.origin === "generated" &&
-            stateRecord.entry.status === "synced" &&
-            stateRecord.entry.sourceDigest === digestValue(sourceText) &&
-            stateRecord.entry.targetDigest === digestValue(targetText) &&
-            !hasRejectedLegacyAudit &&
-            stateRecord.entry.generationRevision ===
-              LEGACY_UNVERIFIED_GENERATION_REVISION;
-
-          const contentRole = config.contentRole?.({
-            catalogId: catalog.id,
-            entry: sourceEntry,
+            deterministicEvaluations: analysis.deterministicEvaluations ?? [],
+            inputDigest,
+            key,
             locale,
             path: pointer,
+            requestDigest,
+            requirements: analysis.requirements,
+            sourceText,
+            targetText,
             unitId: sourceRef.unitId,
-          });
-          const { context, contextDigest } = resolveCurrentContext({
-            catalogId: catalog.id,
-            config,
-            contentRole,
-            entry: sourceEntry,
-            locale,
-            path: pointer,
-            unitId: sourceRef.unitId,
-          });
-          const queueRetirement = (
-            auditId: string,
-            existingAudit: SemanticAuditProvenance
-          ) => {
-            if (!stateRecord.entry) {
-              return;
-            }
-            retirements.push({
-              auditId,
-              catalog,
-              catalogId: catalog.id,
-              existingAudit,
-              existingState: stateRecord.entry,
-              locale,
-              path: targetRef.path,
-              pointer,
-              sourceRef,
-              sourceText,
-              stateKey: stateRecord.key,
-              storedStateKey: stateRecord.storedKey,
-              targetRef,
-              targetText,
-              unitId: sourceRef.unitId,
-            });
-          };
-
-          for (const [auditId, existingAudit] of Object.entries(
-            stateRecord.entry?.validationAudits ?? {}
-          )) {
-            if (!configuredAuditIds.has(auditId)) {
-              queueRetirement(auditId, existingAudit);
-            }
-          }
-
-          for (const audit of audits) {
-            const analyzerArgs = {
-              catalogId: catalog.id,
-              ...(contentRole === undefined ? {} : { contentRole }),
-              ...(context === undefined ? {} : { context }),
-              entry: sourceEntry,
-              ...(stateRecord.entry === undefined
-                ? {}
-                : { existingState: stateRecord.entry }),
-              locale,
-              path: pointer,
-              sourceText: sourceEntry.value,
-              targetText: targetEntry.value,
-              unitId: sourceRef.unitId,
-            };
-            const analysis = await audit.analyze(analyzerArgs);
-            if (!analysis || analysis.requirements.length === 0) {
-              const existingAudit =
-                stateRecord.entry?.validationAudits?.[audit.id];
-              if (existingAudit) {
-                queueRetirement(audit.id, existingAudit);
-              }
-              continue;
-            }
-            validateAnalysis(audit.id, analysis);
-            const inputDigest = createInputDigest({
-              analysis,
-              audit,
-              catalogId: catalog.id,
-              contextDigest,
-              locale,
-              path: pointer,
-              sourceText: sourceEntry.value,
-              targetText: targetEntry.value,
-              unitId: sourceRef.unitId,
-            });
-            const requestDigest = createRequestDigest({
-              analysis,
-              audit,
-              catalogId: catalog.id,
-              contextDigest,
-              locale,
-              path: pointer,
-              sourceText: sourceEntry.value,
-              targetText: targetEntry.value,
-              unitId: sourceRef.unitId,
-            });
-            const key = `${audit.id}:${stateRecord.key}:${requestDigest}`;
-            candidates.push({
-              analysis,
-              audit,
-              catalog,
-              contentRole,
-              context,
-              contextDigest,
-              existingState: stateRecord.entry,
-              inputDigest,
-              path: targetRef.path,
-              request: {
-                auditId: audit.id,
-                catalogId: catalog.id,
-                deterministicEvaluations:
-                  analysis.deterministicEvaluations ?? [],
-                inputDigest,
-                key,
-                locale,
-                path: pointer,
-                requestDigest,
-                requirements: analysis.requirements,
-                sourceText,
-                targetText,
-                unitId: sourceRef.unitId,
-              },
-              skipProviderAudit: skipLegacyProviderAudit,
-              stateKey: stateRecord.key,
-              storedStateKey: stateRecord.storedKey,
-              sourceRef,
-              sourceEntry,
-              targetRef,
-            });
-          }
-        }
+          },
+          skipProviderAudit: skipLegacyProviderAudit,
+          stateKey: stateRecord.key,
+          storedStateKey: stateRecord.storedKey,
+          sourceRef,
+          sourceEntry,
+          targetRef,
+        });
       }
     }
   }
@@ -1694,9 +1701,11 @@ function candidateCacheKey(
   config: AiTranslateConfig,
   candidate: AuditCandidate
 ): TranslationCandidateCacheKey | undefined {
+  const identity = resolveCandidateCacheIdentity(config);
   if (
     config.candidateCache === undefined ||
-    config.generationRevision === undefined
+    config.generationRevision === undefined ||
+    identity === undefined
   ) {
     return undefined;
   }
@@ -1725,7 +1734,7 @@ function candidateCacheKey(
     ...(contentRoleRevision === undefined ? {} : { contentRoleRevision }),
     generationRevision: config.generationRevision,
     ...(config.glossary === undefined ? {} : { glossary: config.glossary }),
-    identity: config.candidateCache.identity,
+    identity,
     instructionDigest: candidate.contextDigest,
     request,
   });
@@ -1892,7 +1901,7 @@ export async function auditCatalogs(
 
   const batchResults = await runWithConcurrency(
     batches,
-    config.concurrency?.documents ?? 4,
+    resolveDocumentConcurrency(config, options),
     async ({
       candidates: batchCandidates,
       requests,
