@@ -52,6 +52,59 @@ export async function readJsonFile(filePath: string): Promise<JsonValue | null> 
   }
 }
 
+/**
+ * Largest state file this library will write.
+ *
+ * State is meant to be committed, and GitHub refuses a push containing a file
+ * over 100 MiB outright, warning from 50 MiB. Discovering that from a rejected
+ * push — after a run that may have spent real money — is the worst place to
+ * learn it, so a write that would cross the line fails here instead, while the
+ * transaction can still be rolled back.
+ */
+export const MAX_COMMITTABLE_STATE_BYTES = 40 * 1024 * 1024;
+
+/**
+ * Serializes state and refuses to write a file too large to commit.
+ *
+ * V8 throws `RangeError: Invalid string length` once a JSON string passes its
+ * maximum length, which on a large corpus arrives before any size check could
+ * run and says nothing about what went wrong, so it is translated here too.
+ */
+export function serializeStateFile(args: {
+  advice: string;
+  filePath: string;
+  /** Bytes allowed for this file. `Infinity` disables the check. */
+  maxBytes?: number;
+  pretty: boolean;
+  value: unknown;
+}): string {
+  const maxBytes = args.maxBytes ?? MAX_COMMITTABLE_STATE_BYTES;
+  let contents: string;
+  try {
+    contents = args.pretty
+      ? `${JSON.stringify(args.value, null, 2)}\n`
+      : `${JSON.stringify(args.value)}\n`;
+  } catch (error) {
+    if (error instanceof RangeError) {
+      throw new Error(
+        `ai-translate state for ${args.filePath} is too large to serialize. ${args.advice}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+
+  const bytes = Buffer.byteLength(contents, "utf8");
+  if (bytes > maxBytes) {
+    throw new Error(
+      `ai-translate state file ${args.filePath} would be ${(bytes / 1024 / 1024).toFixed(1)} MiB, ` +
+        `over the ${(maxBytes / 1024 / 1024).toFixed(0)} MiB limit for a committed file. ` +
+        `${args.advice} Raise maxFileBytes if this state is not committed.`,
+    );
+  }
+  return contents;
+}
+
 export async function writeJsonFileAtomic(
   filePath: string,
   value: unknown,

@@ -69,8 +69,15 @@ provider reports, so changing `model` invalidates the cache on its own rather
 than quietly serving the previous model's output. Set `candidateCache.identity`
 only for a custom provider that cannot report one.
 
-Commit the cache directory to share hits across CI runs, or leave it out of
-version control to keep it per-machine.
+The cache writes one file per candidate at roughly 900 bytes, so a small project
+can commit `.ai-translate/candidate-cache/` and share hits across CI runs. Do not
+commit it at scale: a million candidates is a million files and over a gigabyte,
+which no repository handles well. Add it to `.gitignore` and restore it between
+CI runs with your runner's cache instead — it is derived data, and a cold cache
+costs model calls rather than correctness.
+
+State is the opposite: it is small, it is the record of what is current, and it
+belongs in the repository.
 
 ### Environment variables
 

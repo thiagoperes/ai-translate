@@ -23,11 +23,18 @@ import {
   type DurableTransactionFaultPoint,
   type DurableTransactionStateStore,
 } from "./durable-transaction";
-import { fileExists, readJsonFile } from "./shared";
+import { fileExists, readJsonFile, serializeStateFile } from "./shared";
 
 interface ShardedJsonStateStoreOptions {
   legacyStateFileName?: string;
   lockFileName?: string;
+  /**
+   * Largest shard to write, defaulting to 40 MiB. Sharding normally keeps files
+   * far below that, but a shard holds every locale of one document unit, so a
+   * single enormous document can still produce a file no repository will take.
+   * Raise it, or pass `Infinity`, when state is not committed.
+   */
+  maxFileBytes?: number;
   retryDelayMs?: number;
   rootDir: string;
   shardsDir?: string;
@@ -1086,8 +1093,25 @@ async function waitForStateMutations(
  * a reviewer can see are unchanged. Comparing against what is already on disk is
  * one read against that, and it is what makes a no-op run genuinely a no-op.
  */
-async function writeCompactJsonFileAtomic(filePath: string, value: unknown): Promise<void> {
-  const contents = `${JSON.stringify(value)}\n`;
+async function writeCompactJsonFileAtomic(
+  filePath: string,
+  value: unknown,
+  maxFileBytes?: number,
+): Promise<void> {
+  /*
+   * Sharding keeps files small by splitting on document unit, which stops
+   * working when one unit is enormous: a shard holds every locale of its unit,
+   * so a single 60k-pointer document across 15 locales reaches 150 MiB on its
+   * own and no amount of sharding spreads it.
+   */
+  const contents = serializeStateFile({
+    advice:
+      "A shard holds every locale of one document unit, so split that document into smaller units.",
+    filePath,
+    ...(maxFileBytes === undefined ? {} : { maxBytes: maxFileBytes }),
+    pretty: false,
+    value,
+  });
   if (await fileContentMatches(filePath, contents)) {
     return;
   }
@@ -1206,6 +1230,7 @@ async function writeShardFiles(
   shardsDir: string,
   snapshot: SyncStateSnapshot,
   scope?: SyncStateLoadScope,
+  maxFileBytes?: number,
 ): Promise<void> {
   const groups = groupEntriesByShard(snapshot);
   const existingShards = new Set(await listShardFiles(shardsDir));
@@ -1226,7 +1251,7 @@ async function writeShardFiles(
           : (groups.get(shardPath) ?? null);
         await (merged === null
           ? fs.rm(absolute, { force: true })
-          : writeCompactJsonFileAtomic(absolute, packShard(merged)));
+          : writeCompactJsonFileAtomic(absolute, packShard(merged), maxFileBytes));
       }),
       "Failed to write ai-translate state shards.",
     );
@@ -1240,7 +1265,7 @@ async function writeShardFiles(
   await waitForStateMutations(
     [...groups.entries()].map(async ([shardPath, shard]) => {
       const absolute = path.join(shardsDir, shardPath);
-      await writeCompactJsonFileAtomic(absolute, packShard(shard));
+      await writeCompactJsonFileAtomic(absolute, packShard(shard), maxFileBytes);
       existingShards.delete(shardPath);
     }),
     "Failed to write ai-translate state shards.",
@@ -1462,7 +1487,8 @@ export function createShardedJsonStateStore(
       ? {}
       : { faultInjector: options.transactionFaultInjector }),
     journalPath,
-    saveState: (state, scope) => writeShardFiles(shardsDir, state, scope),
+    saveState: (state, scope) =>
+      writeShardFiles(shardsDir, state, scope, options.maxFileBytes),
     transactionsDir,
   });
 
@@ -1480,7 +1506,7 @@ export function createShardedJsonStateStore(
       return  loadFromShards(shardsDir, scope);
     },
     async save(state, scope) {
-      await writeShardFiles(shardsDir, state, scope);
+      await writeShardFiles(shardsDir, state, scope, options.maxFileBytes);
     },
     async withLock(operation) {
       await fs.mkdir(path.dirname(lockPath), { recursive: true });

@@ -126,7 +126,7 @@ Create `ai-translate.config.ts` in your project root:
 
 ```ts
 import { defineConfig } from "@ai-translate/cli";
-import { createNamespaceJsonCatalog, createJsonStateStore } from "@ai-translate/fs-json";
+import { createNamespaceJsonCatalog, createShardedJsonStateStore } from "@ai-translate/fs-json";
 import { createOpenAiTranslationProvider } from "@ai-translate/provider-openai";
 
 export default defineConfig({
@@ -141,7 +141,7 @@ export default defineConfig({
     }),
   ],
 
-  state: createJsonStateStore({ rootDir: process.cwd() }),
+  state: createShardedJsonStateStore({ rootDir: process.cwd() }),
 
   provider: createOpenAiTranslationProvider({
     apiKey: process.env.OPENAI_API_KEY,
@@ -175,7 +175,9 @@ provider: createAiSdkTranslationProvider({
 
 Both packages are thin transports over the same engine in [`@ai-translate/provider-core`](packages/ai-translate-provider-core), so the generation contract, the repair loop, and the accepted-translation bookkeeping behave identically whichever you pick. Bringing your own vendor means implementing one method, `StructuredCompletionTransport.complete`.
 
-With `content/messages/en/*.json` in place, run `npx ai-translate sync`. Translated files land next to the source (`content/messages/de/*.json`) and state is written to `.ai-translate/`. Commit both — the state file is what makes the next run cheap.
+With `content/messages/en/*.json` in place, run `npx ai-translate sync`. Translated files land next to the source (`content/messages/de/*.json`) and state is written to `.ai-translate/`. Commit both — the state is what makes the next run cheap.
+
+State is written as one small file per document, so it stays reviewable and stays inside what a repository will accept: 1.5M records across 5,000 documents is 255 MB spread over 5,000 files, none larger than 0.1 MB, and a run that changes one document rewrites exactly one of them. `createJsonStateStore` keeps everything in a single file instead, which is simpler for a small project but reaches 183 MB at 247k records — past what GitHub will accept in a push — so it refuses to write a file that large rather than let you discover it at push time.
 
 Then wire the gate into CI:
 

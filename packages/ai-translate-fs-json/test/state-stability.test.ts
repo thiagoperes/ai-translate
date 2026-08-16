@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { createNamespaceJsonCatalog } from "../src/namespace-json";
 import { createShardedJsonStateStore } from "../src/sharded-state";
+import { createJsonStateStore } from "../src/state";
 
 /**
  * State is committed, so a run that changes nothing has to leave it byte for
@@ -118,6 +119,50 @@ describe("state file stability", () => {
 
       expect((await fs.stat(shard)).mtimeMs).toBe(before);
     });
+  });
+
+  it("refuses to write a state file too large to commit", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "state-limit-"));
+    try {
+      // Roughly 2 MiB of records against a 1 MiB budget, which stands in for the
+      // 183 MiB a real 247k-record corpus reaches in one file.
+      const entries = Object.fromEntries(
+        Array.from({ length: 4000 }, (_unused, index) => [
+          `de::messages::unit::/key${String(index)}`,
+          {
+            catalogId: "messages",
+            jsonPointer: `/key${String(index)}`,
+            locale: "de",
+            origin: "generated" as const,
+            sourceDigest: "a".repeat(64),
+            status: "synced" as const,
+            targetDigest: "b".repeat(64),
+            unitId: "unit",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ])
+      );
+      const snapshot = { entries, version: 2 as const };
+
+      await expect(
+        createJsonStateStore({ maxFileBytes: 1024 * 1024, rootDir }).save(snapshot)
+      ).rejects.toThrow(/over the 1 MiB limit for a committed file/u);
+
+      // Sharding does not help when one unit is the thing that is too big, so
+      // the shard writer has to say the same. Its budget here is far smaller
+      // because the packed shard format holds the same records in a fraction of
+      // the bytes; what is under test is the guard, not the encoding.
+      await expect(
+        createShardedJsonStateStore({ maxFileBytes: 8 * 1024, rootDir }).save(snapshot)
+      ).rejects.toThrow(/split that document into smaller units/u);
+
+      // The same corpus writes fine once the caller says it is not committed.
+      await expect(
+        createJsonStateStore({ maxFileBytes: Infinity, rootDir }).save(snapshot)
+      ).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(rootDir, { force: true, recursive: true });
+    }
   });
 
   it("rewrites only the shard whose document changed", async () => {
