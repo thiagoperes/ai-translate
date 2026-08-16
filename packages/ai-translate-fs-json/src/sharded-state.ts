@@ -206,8 +206,22 @@ function decodeCompactString(value: unknown): string | null {
   return null;
 }
 
+/**
+ * Canonical `Date#toISOString` output, which is the only shape that survives the
+ * round trip to a number and back. Checking the shape with a pattern rather than
+ * reformatting a `Date` matters because this runs once per record on every save:
+ * building and formatting a throwaway `Date` for each was among the most
+ * expensive things a no-op save did.
+ */
+const ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
+
 function packTimestamp(value: string): PackedTimestamp {
+  if (!ISO_TIMESTAMP_PATTERN.test(value)) {
+    return value;
+  }
   const timestamp = Date.parse(value);
+  // A shape-valid but impossible date (month 13) parses to NaN, and one outside
+  // the representable range is not a safe integer.
   return Number.isSafeInteger(timestamp) && new Date(timestamp).toISOString() === value
     ? timestamp
     : value;

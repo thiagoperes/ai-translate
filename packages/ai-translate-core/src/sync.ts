@@ -2032,6 +2032,12 @@ async function prepareTask(args: {
     options?.includePaths === undefined
       ? undefined
       : new Set(options.includePaths);
+  // Same reason as `includedPaths`: consulted once per entry, so a list would
+  // make a forced narrow retranslation cost its own length on every pointer.
+  const forcedPaths =
+    options?.forceRetranslatePaths === undefined
+      ? undefined
+      : new Set(options.forceRetranslatePaths);
   const existingTargetEntries =
     existingDocument === null
       ? new Map<string, Entry>()
@@ -2237,8 +2243,7 @@ async function prepareTask(args: {
     });
     const shouldForceRetranslate =
       options?.forceRetranslate === true &&
-      (options.forceRetranslatePaths === undefined ||
-        options.forceRetranslatePaths.includes(pointer));
+      (forcedPaths === undefined || forcedPaths.has(pointer));
 
     const acceptanceAlreadyCovered = await storedAcceptanceCoversEntry({
       catalogId: document.ref.catalogId,

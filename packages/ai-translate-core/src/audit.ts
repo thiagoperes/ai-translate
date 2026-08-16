@@ -815,6 +815,10 @@ async function collectCandidates(
   const retirements: AuditRetirement[] = [];
   const configuredAuditIds = new Set(audits.map(({ id }) => id));
   const requestedUnits = options.unitIds ? new Set(options.unitIds) : undefined;
+  // Consulted once per pointer per locale, so a list here would make a
+  // path-scoped audit cost the length of that list on every entry.
+  const includedPaths =
+    options.includePaths === undefined ? undefined : new Set(options.includePaths);
   const locales = resolveLocales(config, options);
 
   /*
@@ -912,10 +916,7 @@ async function collectCandidates(
     );
 
     for (const [pointer, sourceEntry] of sourceEntries) {
-      if (
-        options.includePaths !== undefined &&
-        !options.includePaths.includes(pointer)
-      ) {
+      if (includedPaths !== undefined && !includedPaths.has(pointer)) {
         continue;
       }
       const targetEntry = targetEntries.get(pointer);
