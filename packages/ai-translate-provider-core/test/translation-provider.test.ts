@@ -9,6 +9,7 @@ import * as z from "zod";
 import {
   createStructuredTranslationProvider,
   createTranslationOutputContractRevision,
+  DEFAULT_TRANSLATION_EXECUTION_OPTIONS,
   StructuredTranslationProvider,
   TRANSLATION_OUTPUT_CONTRACT_MATERIAL,
 } from "../src/index";
@@ -43,7 +44,22 @@ class TestTranslationProvider extends StructuredTranslationProvider {
     } = {},
   ) {
     const { model, transport, ...rest } = options;
-    super({ ...rest, model: model ?? TEST_MODEL, transport: transport ?? unreachableTransport });
+    super({
+      batchSize: 100,
+      concurrentRequests: 6,
+      maxCharsPerBatch: 14_000,
+      maxRetries: 3,
+      requestTimeoutMs: 120_000,
+      ...rest,
+      model: model ?? TEST_MODEL,
+      transport: transport ?? unreachableTransport,
+    });
+  }
+}
+
+class DefaultTranslationProvider extends StructuredTranslationProvider {
+  constructor(transport: StructuredCompletionTransport) {
+    super({ model: TEST_MODEL, transport });
   }
 }
 
@@ -290,6 +306,67 @@ describe("TestTranslationProvider", () => {
 
     expect(result).toEqual([]);
     expect(parse).not.toHaveBeenCalled();
+  });
+
+  it("defaults to one-shot, latency-first execution", async () => {
+    expect(DEFAULT_TRANSLATION_EXECUTION_OPTIONS).toEqual({
+      batchSize: 1,
+      concurrentRequests: 32,
+      maxCharsPerBatch: 2_000,
+      maxCompletionTokens: 8_192,
+      maxRetries: 1,
+      requestTimeoutMs: 45_000,
+    });
+
+    const { transport, parse } = createMockTransport((args) => {
+      const messages = args.messages as readonly { content: string; role: string }[];
+      const payload = JSON.parse(messages[1]?.content ?? "{}") as {
+        requests: readonly { key: string; text: string }[];
+      };
+      return {
+        choices: [
+          {
+            message: {
+              parsed: {
+                translations: Object.fromEntries(
+                  payload.requests.map(({ key, text }) => [key, { translation: `de:${text}` }]),
+                ),
+              },
+            },
+          },
+        ],
+      };
+    });
+    const provider = new DefaultTranslationProvider(transport);
+
+    await expect(
+      provider.translate({
+        locale: "de",
+        requests: [
+          createRequest("one", "One"),
+          createRequest("two", "Two"),
+          createRequest("three", "Three"),
+        ],
+      }),
+    ).resolves.toEqual([
+      { key: "one", translation: "de:One" },
+      { key: "two", translation: "de:Two" },
+      { key: "three", translation: "de:Three" },
+    ]);
+    expect(parse).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not retry failed translation requests by default", async () => {
+    const { transport, parse } = createMockTransport(() => ({ choices: [] }));
+    const provider = new DefaultTranslationProvider(transport);
+
+    await expect(
+      provider.translate({
+        locale: "de",
+        requests: [createRequest("greeting", "Hello")],
+      }),
+    ).rejects.toThrow("failed after 1 attempt(s)");
+    expect(parse).toHaveBeenCalledOnce();
   });
 
   it("coalesces only requests with identical model-visible translation inputs", async () => {

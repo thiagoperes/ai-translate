@@ -1,6 +1,6 @@
 {
   "name": "@ai-translate/core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Engine for AI translation pipelines: catalog reconciliation, translation state and provenance, deterministic validators, and semantic audits.",
   "keywords": [
     "i18n",

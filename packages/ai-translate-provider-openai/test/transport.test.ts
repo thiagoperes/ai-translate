@@ -8,6 +8,7 @@ import {
   createOpenAiTransport,
   createOpenAiTranslationProvider,
   DEFAULT_MODEL,
+  DEFAULT_REASONING_EFFORT,
   OpenAiSemanticAuditProvider,
   OpenAiTranslationProvider,
 } from "../src/index";
@@ -160,6 +161,22 @@ describe("OpenAI providers", () => {
 
     const [body] = parse.mock.calls[0] as unknown as ParseArguments;
     expect(body.model).toBe(DEFAULT_MODEL);
+    expect(body.reasoning_effort).toBe(DEFAULT_REASONING_EFFORT);
+  });
+
+  it("defaults transport requests to a 45 second timeout", async () => {
+    const { client, parse } = createMockClient();
+    const transport = createOpenAiTransport({ client });
+
+    await transport.complete({
+      messages: [{ content: "user payload", role: "user" }],
+      modelId: "gpt-5.6-luna",
+      schema,
+      schemaName: "answer",
+    });
+
+    const [, requestOptions] = parse.mock.calls[0] as unknown as ParseArguments;
+    expect(requestOptions?.timeout).toBe(45_000);
   });
 
   it("hands the configured timeout to the transport it builds", async () => {

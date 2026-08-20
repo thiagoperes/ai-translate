@@ -1,6 +1,6 @@
 {
   "name": "@ai-translate/provider-core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Vendor-neutral translation and semantic-audit engine for ai-translate: prompting, batching, structured output, validation and repair over a pluggable model transport.",
   "keywords": [
     "i18n",

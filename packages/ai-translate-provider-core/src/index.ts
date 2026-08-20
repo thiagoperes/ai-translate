@@ -728,6 +728,7 @@ export interface StructuredTranslationProviderOptions {
   concurrentRequests?: number;
   maxCharsPerBatch?: number;
   maxCompletionTokens?: number;
+  /** Total provider attempts per unresolved request. Set to 1 to disable retries. */
   maxRetries?: number;
   /** Sent with every request and mixed into the prompt-cache routing hint. */
   model: string;
@@ -761,6 +762,7 @@ export interface StructuredSemanticAuditProviderOptions {
   concurrentRequests?: number;
   forwardPrompt?: SemanticAuditPrompt;
   maxCharsPerBatch?: number;
+  /** Total provider attempts per unresolved request. Set to 1 to disable retries. */
   maxRetries?: number;
   reasoningEffort?: ReasoningEffort;
   requestTimeoutMs?: number;
@@ -778,13 +780,16 @@ export interface SystemPromptArgs {
 
 export type SystemPrompt = string | ((args: SystemPromptArgs) => string);
 
-const DEFAULT_BATCH_SIZE = 100;
-const DEFAULT_CONCURRENT_REQUESTS = 6;
-const DEFAULT_MAX_CHARS_PER_BATCH = 14_000;
-const DEFAULT_MAX_COMPLETION_TOKENS = 8_192;
-const DEFAULT_MAX_RETRIES = 3;
-const DEFAULT_AUDIT_BATCH_SIZE = 50;
-const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
+export const DEFAULT_TRANSLATION_EXECUTION_OPTIONS = {
+  batchSize: 1,
+  concurrentRequests: 32,
+  maxCharsPerBatch: 2_000,
+  maxCompletionTokens: 8_192,
+  // Despite the historical option name, this is the total attempt count.
+  maxRetries: 1,
+  requestTimeoutMs: 45_000,
+} as const;
+const DEFAULT_AUDIT_BATCH_SIZE = 1;
 const MAX_RETRY_DELAY_MS = 60_000;
 const RETRY_BASE_DELAY_MS = 200;
 const LEGACY_SEMANTIC_AUDIT_CACHE_SCHEMA_VERSION = 1;
@@ -3125,28 +3130,28 @@ export class StructuredTranslationProvider implements TranslationProvider {
   constructor(options: StructuredTranslationProviderOptions) {
     this.batchSize = requirePositiveIntegerOption(
       "batchSize",
-      options.batchSize ?? DEFAULT_BATCH_SIZE,
+      options.batchSize ?? DEFAULT_TRANSLATION_EXECUTION_OPTIONS.batchSize,
     );
     const requestTimeoutMs = requirePositiveIntegerOption(
       "requestTimeoutMs",
-      options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      options.requestTimeoutMs ?? DEFAULT_TRANSLATION_EXECUTION_OPTIONS.requestTimeoutMs,
     );
     this.transport = options.transport;
     this.concurrentRequests = requirePositiveIntegerOption(
       "concurrentRequests",
-      options.concurrentRequests ?? DEFAULT_CONCURRENT_REQUESTS,
+      options.concurrentRequests ?? DEFAULT_TRANSLATION_EXECUTION_OPTIONS.concurrentRequests,
     );
     this.maxCharsPerBatch = requirePositiveIntegerOption(
       "maxCharsPerBatch",
-      options.maxCharsPerBatch ?? DEFAULT_MAX_CHARS_PER_BATCH,
+      options.maxCharsPerBatch ?? DEFAULT_TRANSLATION_EXECUTION_OPTIONS.maxCharsPerBatch,
     );
     this.maxCompletionTokens = requirePositiveIntegerOption(
       "maxCompletionTokens",
-      options.maxCompletionTokens ?? DEFAULT_MAX_COMPLETION_TOKENS,
+      options.maxCompletionTokens ?? DEFAULT_TRANSLATION_EXECUTION_OPTIONS.maxCompletionTokens,
     );
     this.maxRetries = requirePositiveIntegerOption(
       "maxRetries",
-      options.maxRetries ?? DEFAULT_MAX_RETRIES,
+      options.maxRetries ?? DEFAULT_TRANSLATION_EXECUTION_OPTIONS.maxRetries,
     );
     this.model = options.model;
     this.reasoningEffort = options.reasoningEffort;
@@ -3689,21 +3694,21 @@ export class StructuredSemanticAuditProvider implements SemanticAuditProvider {
     };
     const requestTimeoutMs = requirePositiveIntegerOption(
       "requestTimeoutMs",
-      options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      options.requestTimeoutMs ?? DEFAULT_TRANSLATION_EXECUTION_OPTIONS.requestTimeoutMs,
     );
     this.transport = options.transport;
     this.concurrentRequests = requirePositiveIntegerOption(
       "concurrentRequests",
-      options.concurrentRequests ?? DEFAULT_CONCURRENT_REQUESTS,
+      options.concurrentRequests ?? DEFAULT_TRANSLATION_EXECUTION_OPTIONS.concurrentRequests,
     );
     this.forwardPrompt = options.forwardPrompt;
     this.maxCharsPerBatch = requirePositiveIntegerOption(
       "maxCharsPerBatch",
-      options.maxCharsPerBatch ?? DEFAULT_MAX_CHARS_PER_BATCH,
+      options.maxCharsPerBatch ?? DEFAULT_TRANSLATION_EXECUTION_OPTIONS.maxCharsPerBatch,
     );
     this.maxRetries = requirePositiveIntegerOption(
       "maxRetries",
-      options.maxRetries ?? DEFAULT_MAX_RETRIES,
+      options.maxRetries ?? DEFAULT_TRANSLATION_EXECUTION_OPTIONS.maxRetries,
     );
     this.reasoningEffort = options.reasoningEffort;
     this.requestTimeoutMs = requestTimeoutMs;

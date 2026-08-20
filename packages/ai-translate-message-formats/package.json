@@ -1,6 +1,6 @@
 {
   "name": "@ai-translate/message-formats",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Message format adapters for ai-translate: ICU MessageFormat plural and select parity, i18next interpolation and nesting, and CLDR plural key strategies.",
   "keywords": [
     "i18n",

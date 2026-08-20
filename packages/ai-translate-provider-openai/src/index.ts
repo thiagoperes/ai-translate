@@ -39,8 +39,9 @@ export type {
  * pass `model` explicitly.
  */
 export const DEFAULT_MODEL = "gpt-5.6-luna";
+export const DEFAULT_REASONING_EFFORT = "medium";
 
-const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 45_000;
 
 export interface OpenAiTransportOptions {
   apiKey?: string;
@@ -109,6 +110,7 @@ export class OpenAiTranslationProvider extends StructuredTranslationProvider {
     super({
       ...engineOptions,
       model: model ?? DEFAULT_MODEL,
+      reasoningEffort: engineOptions.reasoningEffort ?? DEFAULT_REASONING_EFFORT,
       transport: createOpenAiTransport({
         ...(apiKey === undefined ? {} : { apiKey }),
         ...(client === undefined ? {} : { client }),

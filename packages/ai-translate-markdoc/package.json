@@ -1,6 +1,6 @@
 {
   "name": "@ai-translate/markdoc",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Markdoc catalog adapter for ai-translate, covering frontmatter, inline tokens, and tag attributes.",
   "keywords": [
     "i18n",

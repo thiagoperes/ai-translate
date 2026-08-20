@@ -39,7 +39,15 @@ class TestSemanticAuditProvider extends StructuredSemanticAuditProvider {
     } = {},
   ) {
     const { transport, ...rest } = options;
-    super({ ...rest, transport: transport ?? unreachableTransport });
+    super({
+      batchSize: 50,
+      concurrentRequests: 6,
+      maxCharsPerBatch: 14_000,
+      maxRetries: 3,
+      requestTimeoutMs: 120_000,
+      ...rest,
+      transport: transport ?? unreachableTransport,
+    });
   }
 }
 
