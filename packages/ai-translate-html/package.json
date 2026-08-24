@@ -50,8 +50,8 @@
   },
   "dependencies": {
     "@ai-translate/core": "workspace:*",
-    "globby": "16.2.2",
-    "node-html-parser": "9.0.0"
+    "globby": "16.2.4",
+    "node-html-parser": "9.0.1"
   },
   "engines": {
     "node": ">=20.19.0"
