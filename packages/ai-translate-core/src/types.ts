@@ -293,6 +293,8 @@ export type TranslationRequestContextRevisionResolver = (
 ) => string | undefined;
 
 export interface TranslationRequest {
+  /** Host-owned HTML inline elements may move with the target grammar. */
+  inlineMarkup?: boolean;
   catalogId: string;
   contentRole?: TranslationContentRole;
   context?: TranslationContext;
@@ -344,6 +346,8 @@ export interface TranslationResponse {
 }
 
 export interface TranslationProvider {
+  /** True when every transport attempt is reported through core telemetry. */
+  reportsRequestMetrics?: boolean;
   translate(args: {
     batchContext?: TranslationContext;
     batchKey?: string;
@@ -369,6 +373,7 @@ export interface TranslationCandidateCacheIdentity {
  * deliberately excluded — cache hits are always revalidated and rebound.
  */
 export interface TranslationCandidateCacheKey {
+  inlineMarkup?: boolean;
   catalogId: string;
   contentRole?: TranslationContentRole;
   contentRoleRevision: string;
@@ -921,6 +926,13 @@ export interface SyncPhaseTimings {
 }
 
 export interface SyncMetrics {
+  /** Logical calls to TranslationProvider.translate, including custom providers. */
+  providerInvocationCount?: number;
+  /** Retries among the reported transport attempts. */
+  providerRetryCount?: number;
+  providerFailedRequestCount?: number;
+  providerUsage?: ProviderTokenUsage & { requestsWithUsage: number };
+  providerLatency?: { p50Ms: number; p95Ms: number; p99Ms: number };
   candidateCacheHits?: number;
   candidateCacheMisses?: number;
   candidateCacheWrites?: number;
@@ -932,10 +944,29 @@ export interface SyncMetrics {
   /** Exact pending-translation / invalidation reasons → entry counts. */
   invalidationReasons?: Readonly<Record<string, number>>;
   phases?: SyncPhaseTimings;
+  /** Actual attempts; omitted when a custom provider does not report requests. */
   providerRequestCount?: number;
   scannedDocuments: number;
   staleManualEntries: number;
   translatedEntries: number;
+}
+
+export interface ProviderTokenUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
+  cacheWriteInputTokens?: number;
+  /** Included in outputTokens, not an additional charge. */
+  reasoningTokens?: number;
+}
+
+export interface ProviderRequestMetrics {
+  attempt: number;
+  durationMs: number;
+  failed: boolean;
+  modelId: string;
+  operation: "translation" | "audit";
+  usage?: ProviderTokenUsage;
 }
 
 export interface SyncResult {

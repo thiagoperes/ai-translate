@@ -1,6 +1,6 @@
 {
   "name": "@ai-translate/core",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Engine for AI translation pipelines: catalog reconciliation, translation state and provenance, deterministic validators, and semantic audits.",
   "keywords": [
     "i18n",
@@ -94,6 +94,11 @@
       "types": "./dist/tokens.d.mts",
       "import": "./dist/tokens.mjs",
       "default": "./dist/tokens.mjs"
+    },
+    "./telemetry": {
+      "types": "./dist/telemetry.d.mts",
+      "import": "./dist/telemetry.mjs",
+      "default": "./dist/telemetry.mjs"
     },
     "./types": {
       "types": "./dist/types.d.mts",

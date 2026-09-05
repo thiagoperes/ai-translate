@@ -3,7 +3,10 @@ import { createHash } from "node:crypto";
 import { isSemanticallySubstantiveEvidenceSpan } from "@ai-translate/core/audit";
 import { mergeTranslationContexts, normalizeTranslationContext } from "@ai-translate/core/policies";
 import { tokenizeText, validateTokenParity } from "@ai-translate/core/tokens";
+import { getProviderRunCache, reportProviderRequest } from "@ai-translate/core/telemetry";
 import type {
+  ProviderRequestMetrics,
+  ProviderTokenUsage,
   GlossaryTerm,
   SemanticAuditEvidenceSpan,
   SemanticAuditEvaluation,
@@ -27,6 +30,9 @@ export interface StructuredCompletionMessage {
 }
 
 export interface StructuredCompletionRequest {
+  attempt?: number;
+  operation?: "translation" | "audit";
+  onUsage?: (usage: ProviderTokenUsage) => void;
   maxCompletionTokens?: number;
   messages: readonly StructuredCompletionMessage[];
   /**
@@ -63,6 +69,56 @@ export interface StructuredCompletionTransport {
   readonly label: string;
 }
 
+function measuredTransport(
+  transport: StructuredCompletionTransport,
+  onRequest: ((metrics: ProviderRequestMetrics) => void) | undefined,
+): StructuredCompletionTransport {
+  return {
+    label: transport.label,
+    async complete(request) {
+      const startedAt = performance.now();
+      let usage: ProviderTokenUsage | undefined;
+      let failed = true;
+      let removeAbortListener = (): void => {};
+      const aborted = new Promise<never>((_resolve, reject) => {
+        const onAbort = (): void => {
+          reject(new Error("Translation transport was aborted."));
+        };
+        request.signal?.addEventListener("abort", onAbort, { once: true });
+        removeAbortListener = () => {
+          request.signal?.removeEventListener("abort", onAbort);
+        };
+      });
+      try {
+        const result = await Promise.race([
+          transport.complete({
+            ...request,
+            onUsage(value) {
+              usage = value;
+              request.onUsage?.(value);
+            },
+          }),
+          aborted,
+        ]);
+        failed = result === undefined || result === null;
+        return result;
+      } finally {
+        removeAbortListener();
+        const metrics: ProviderRequestMetrics = {
+          attempt: request.attempt ?? 1,
+          durationMs: performance.now() - startedAt,
+          failed,
+          modelId: request.modelId,
+          operation: request.operation ?? "translation",
+          ...(usage === undefined ? {} : { usage }),
+        };
+        reportProviderRequest(metrics);
+        onRequest?.(metrics);
+      }
+    },
+  };
+}
+
 const TRANSLATION_RESPONSE_FORMAT_NAME = "ai_translate_batch";
 
 /**
@@ -76,6 +132,7 @@ function contractResponseSchema(schema: z.ZodType): unknown {
 }
 
 interface TranslationResponseFormatItem {
+  inlineMarkup?: boolean;
   candidateCount: number;
   key: string;
   numericAllowedValues: readonly (readonly [string, ...string[]])[];
@@ -119,6 +176,7 @@ function translationResponseSchema(
       ({
         candidateCount,
         key,
+        inlineMarkup,
         numericAllowedValues,
         partMaximumLengths,
         partRequiredPatterns,
@@ -158,38 +216,43 @@ function translationResponseSchema(
                         )
                         .strict(),
                     }),
-                translationParts: z
-                  .object(
-                    Object.fromEntries(
-                      Array.from({ length: protectedSlotCount + 1 }, (_, index) => [
-                        `part_${String(index)}`,
-                        (() => {
-                          const requiresClauseBoundary = partRequiresClauseBoundary[index] === true;
-                          const partRequiredPattern = partRequiredPatterns[index];
-                          const combinedPattern =
-                            partRequiredPattern !== undefined && requiresClauseBoundary
-                              ? `(?:${partRequiredPattern}[\\s\\S]*[.!?…;:。！？]|[.!?…;:。！？][\\s\\S]*${partRequiredPattern})`
-                              : partRequiredPattern;
-                          const requiredPattern =
-                            combinedPattern ??
-                            (requiresClauseBoundary
-                              ? "[.!?…;:。！？]"
-                              : requiredNonEmptyParts.has(index)
-                                ? "\\S"
-                                : undefined);
-                          const modelOwnedPattern = digitFreeRequiredPattern(requiredPattern);
-                          const modelOwnedProse = z
-                            .string()
-                            .regex(new RegExp(modelOwnedPattern, "u"));
-                          const maximum = partMaximumLengths[index];
-                          return maximum === undefined
-                            ? modelOwnedProse
-                            : modelOwnedProse.max(maximum);
-                        })(),
-                      ]),
-                    ),
-                  )
-                  .strict(),
+                ...(inlineMarkup
+                  ? { translationTemplate: z.string().min(1) }
+                  : {
+                      translationParts: z
+                        .object(
+                          Object.fromEntries(
+                            Array.from({ length: protectedSlotCount + 1 }, (_, index) => [
+                              `part_${String(index)}`,
+                              (() => {
+                                const requiresClauseBoundary =
+                                  partRequiresClauseBoundary[index] === true;
+                                const partRequiredPattern = partRequiredPatterns[index];
+                                const combinedPattern =
+                                  partRequiredPattern !== undefined && requiresClauseBoundary
+                                    ? `(?:${partRequiredPattern}[\\s\\S]*[.!?…;:。！？]|[.!?…;:。！？][\\s\\S]*${partRequiredPattern})`
+                                    : partRequiredPattern;
+                                const requiredPattern =
+                                  combinedPattern ??
+                                  (requiresClauseBoundary
+                                    ? "[.!?…;:。！？]"
+                                    : requiredNonEmptyParts.has(index)
+                                      ? "\\S"
+                                      : undefined);
+                                const modelOwnedPattern = digitFreeRequiredPattern(requiredPattern);
+                                const modelOwnedProse = z
+                                  .string()
+                                  .regex(new RegExp(modelOwnedPattern, "u"));
+                                const maximum = partMaximumLengths[index];
+                                return maximum === undefined
+                                  ? modelOwnedProse
+                                  : modelOwnedProse.max(maximum);
+                              })(),
+                            ]),
+                          ),
+                        )
+                        .strict(),
+                    }),
               };
         const output =
           candidateCount === 1
@@ -217,6 +280,7 @@ function translationResponseSchema(
 }
 
 interface ParsedTranslationOutput {
+  translationTemplate?: string;
   localizedNumbers?: Readonly<Record<string, string>>;
   translation?: string;
   translationParts?: Readonly<Record<string, string>>;
@@ -250,10 +314,17 @@ function decodeTranslationOutput(
         ),
       )
     : undefined;
-  if (typeof value.translation !== "string" && translationParts === undefined) {
+  if (
+    typeof value.translation !== "string" &&
+    typeof value.translationTemplate !== "string" &&
+    translationParts === undefined
+  ) {
     throw new Error(`${label} returned an invalid translation for key "${key}".`);
   }
   return {
+    ...(typeof value.translationTemplate === "string"
+      ? { translationTemplate: value.translationTemplate }
+      : {}),
     ...(localizedNumbers === undefined ? {} : { localizedNumbers }),
     ...(typeof value.translation === "string" ? { translation: value.translation } : {}),
     ...(translationParts === undefined ? {} : { translationParts }),
@@ -423,6 +494,7 @@ interface ProtectedLocalizedSubstitution {
 }
 
 interface ProtectedRequestText {
+  inlineMarkup?: boolean;
   assemblySlots: readonly ProtectedAssemblySlot[];
   destinations: readonly ProtectedMarkdownDestination[];
   literalExpectations: readonly ProtectedExactLiteralExpectation[];
@@ -724,7 +796,10 @@ function uniqueMarker(sourceText: string, create: (suffix: string) => string): s
 }
 
 export interface StructuredTranslationProviderOptions {
-  batchSize?: number;
+  /** Automatic batches retain parallelism and isolate long or constrained entries. */
+  batchSize?: number | "adaptive";
+  maxEstimatedOutputTokensPerBatch?: number;
+  onRequest?: (metrics: ProviderRequestMetrics) => void;
   concurrentRequests?: number;
   maxCharsPerBatch?: number;
   maxCompletionTokens?: number;
@@ -755,6 +830,7 @@ export interface SemanticAuditResponseCache {
 }
 
 export interface StructuredSemanticAuditProviderOptions {
+  onRequest?: (metrics: ProviderRequestMetrics) => void;
   adversarialPrompt?: SemanticAuditPrompt;
   batchSize?: number;
   cache?: SemanticAuditResponseCache;
@@ -781,15 +857,17 @@ export interface SystemPromptArgs {
 export type SystemPrompt = string | ((args: SystemPromptArgs) => string);
 
 export const DEFAULT_TRANSLATION_EXECUTION_OPTIONS = {
-  batchSize: 1,
+  batchSize: "adaptive",
   concurrentRequests: 32,
   maxCharsPerBatch: 2_000,
   maxCompletionTokens: 8_192,
+  maxEstimatedOutputTokensPerBatch: 2_048,
   // Despite the historical option name, this is the total attempt count.
   maxRetries: 1,
   requestTimeoutMs: 45_000,
 } as const;
 const DEFAULT_AUDIT_BATCH_SIZE = 1;
+const MAX_ADAPTIVE_BATCH_SIZE = 8;
 const MAX_RETRY_DELAY_MS = 60_000;
 const RETRY_BASE_DELAY_MS = 200;
 const LEGACY_SEMANTIC_AUDIT_CACHE_SCHEMA_VERSION = 1;
@@ -827,15 +905,29 @@ interface CoalescedTranslationBatch {
   readonly representativeKeyByOriginalKey: ReadonlyMap<string, string>;
 }
 
+interface TranslationFlight {
+  response?: TranslationResponse;
+  error?: unknown;
+}
+
 function errorStatus(error: unknown): number | undefined {
   if (typeof error !== "object" || error === null) {
     return undefined;
   }
-  const status = (error as { status?: unknown }).status;
+  const fields = error as { status?: unknown; statusCode?: unknown };
+  const status = fields.status ?? fields.statusCode;
   return typeof status === "number" && Number.isFinite(status) ? status : undefined;
 }
 
 function isRetryableError(error: unknown): boolean {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "isRetryable" in error &&
+    typeof error.isRetryable === "boolean"
+  ) {
+    return error.isRetryable;
+  }
   const status = errorStatus(error);
   return (
     status === undefined || status === 408 || status === 409 || status === 429 || status >= 500
@@ -850,7 +942,8 @@ function errorHeader(error: unknown, name: string): string | undefined {
   if (typeof error !== "object" || error === null) {
     return undefined;
   }
-  const headers = (error as { headers?: unknown }).headers;
+  const fields = error as { headers?: unknown; responseHeaders?: unknown };
+  const headers = fields.headers ?? fields.responseHeaders;
   if (typeof headers !== "object" || headers === null) {
     return undefined;
   }
@@ -1091,6 +1184,7 @@ function protectRequestText(
 
   return {
     assemblySlots: coalesced.slots,
+    ...(request.inlineMarkup ? { inlineMarkup: true } : {}),
     destinations,
     literalExpectations,
     literals,
@@ -1412,17 +1506,65 @@ function createBatches(
   batchSize: number,
   maxCharsPerBatch: number,
   batchContext?: TranslationContext,
+  adaptiveConcurrency?: number,
+  maxEstimatedOutputTokens: number = DEFAULT_TRANSLATION_EXECUTION_OPTIONS.maxEstimatedOutputTokensPerBatch,
 ): ProviderBatch[] {
   const batches: TranslationRequest[][] = [];
   let currentBatch: TranslationRequest[] = [];
 
-  for (const request of orderRequestsForBatching(requests)) {
+  const adaptiveLimit =
+    adaptiveConcurrency === undefined
+      ? batchSize
+      : Math.min(batchSize, Math.max(1, Math.ceil(requests.length / adaptiveConcurrency)));
+  const groupKey = (request: TranslationRequest): string =>
+    JSON.stringify([
+      request.contentRole ?? "",
+      normalizeTranslationContext(mergeTranslationContexts(batchContext, request.context)) ?? null,
+      isFastLaneRequest(request),
+    ]);
+  const ordered = orderRequestsForBatching(requests);
+  if (adaptiveConcurrency !== undefined) {
+    ordered.sort((a, b) => groupKey(a).localeCompare(groupKey(b)));
+  }
+  const itemLimit = (request: TranslationRequest): number => {
+    if (adaptiveConcurrency === undefined) {
+      return batchSize;
+    }
+    if (
+      request.sourceText.length > 1_000 ||
+      request.outputContract !== undefined ||
+      hasValidatorFeedback(request.context) ||
+      tokenizeText(request.sourceText).some(({ type }) => type !== "text")
+    ) {
+      return 1;
+    }
+    return Math.min(adaptiveLimit, request.sourceText.length > 240 ? 2 : 8);
+  };
+  for (const request of ordered) {
     const candidateBatch = [...currentBatch, request];
     const exceedsChars =
       currentBatch.length > 0 &&
       estimateBatchContentChars(candidateBatch, batchContext) > maxCharsPerBatch;
-    const exceedsItems = currentBatch.length >= batchSize;
-    if (exceedsChars || exceedsItems) {
+    const exceedsItems = candidateBatch.length > Math.min(...candidateBatch.map(itemLimit));
+    const first = currentBatch[0];
+    const incompatible =
+      adaptiveConcurrency !== undefined &&
+      first !== undefined &&
+      groupKey(first) !== groupKey(request);
+    // UTF-8 accounts for scripts that need multiple tokens per character;
+    // expansion headroom and assembly syntax count toward the output budget.
+    const exceedsOutput =
+      currentBatch.length > 0 &&
+      candidateBatch.reduce(
+        (total, item) =>
+          total +
+          (Math.ceil((Buffer.byteLength(item.sourceText, "utf8") * 2) / 3) +
+            80 +
+            tokenizeText(item.sourceText).length * 16) *
+            (item.outputContract?.candidateCount ?? 1),
+        0,
+      ) > maxEstimatedOutputTokens;
+    if (exceedsChars || exceedsItems || incompatible || exceedsOutput) {
       batches.push(currentBatch);
       currentBatch = [];
     }
@@ -2284,7 +2426,7 @@ const CONTENT_ROLE_GUIDANCE: Readonly<Record<TranslationContentRole, string>> = 
   body: "Write fluent native-language prose. Preserve meaning, evidence, qualifiers, citations, and structure; do not compress it merely to mirror English character length.",
   cta: "Use a short, idiomatic action phrase that preserves the exact action and commitment level.",
   heading:
-    "Preserve the section's search or product intent in a concise, natural heading. Avoid awkward literal phrasing and invented claims.",
+    "Preserve the section's search or product intent in a concise, natural heading. Preserve agency: who acts, who benefits, and who has control must remain the same; never turn a subject's autonomy into control over that subject. Avoid awkward literal phrasing and invented claims.",
   "link-anchor":
     "Use a descriptive, idiomatic anchor that makes the destination clear. Preserve placeholders and do not broaden the destination's promise.",
   "metadata-description":
@@ -2294,7 +2436,7 @@ const CONTENT_ROLE_GUIDANCE: Readonly<Record<TranslationContentRole, string>> = 
   "table-cell":
     "Keep the cell concise and parallel with adjacent comparison cells while preserving every qualifier, number, and attribution.",
   "ui-label":
-    "Use concise, familiar interface language that fits a compact control without weakening or broadening its meaning.",
+    "Use concise, familiar interface language that fits a compact control without weakening or broadening its meaning. Preserve the exact operation, its object and its state: preview is distinct from viewing, archiving from deleting, and saving from publishing. Brevity must never erase an action modifier or workflow distinction.",
 };
 
 function buildContentRoleSection(contentRoles?: readonly TranslationContentRole[]): string {
@@ -2456,7 +2598,7 @@ function translationCompletionOptions(args: {
   };
 }
 
-const FAST_LANE_CONTENT_ROLES = new Set<TranslationContentRole>(["cta", "heading", "ui-label"]);
+const FAST_LANE_CONTENT_ROLES = new Set<TranslationContentRole>(["cta", "ui-label"]);
 const FAST_LANE_MAX_SOURCE_CHARS = 240;
 
 function isFastLaneRequest(request: TranslationRequest): boolean {
@@ -2623,6 +2765,108 @@ function semanticSelfCheckPayload(
   };
 }
 
+function inlineTagSlot(slot: ProtectedAssemblySlot): boolean {
+  const tokens = tokenizeText(slot.raw);
+  return tokens.length === 1 && tokens[0]?.type === "tag";
+}
+
+function inlineWireTokens(protectedText: ProtectedRequestText): Map<string, string> {
+  const names = new Map<string, string>();
+  const used = new Set<string>();
+  const tokens = new Map<string, string>();
+  for (const slot of protectedText.assemblySlots) {
+    const [token] = tokenizeText(slot.raw);
+    if (!inlineTagSlot(slot) || token?.type !== "tag") {
+      tokens.set(slot.marker, slot.marker);
+      continue;
+    }
+    let name = names.get(token.name);
+    if (name === undefined) {
+      const base = token.name.split("_")[0] ?? "span";
+      name = base;
+      while (used.has(name)) {
+        name += "_x";
+      }
+      used.add(name);
+      names.set(token.name, name);
+    }
+    tokens.set(
+      slot.marker,
+      token.tagKind === "close"
+        ? `</${name}>`
+        : token.tagKind === "self"
+          ? `<${name}/>`
+          : `<${name}>`,
+    );
+  }
+  return tokens;
+}
+
+function inlineSourceTemplate(protectedText: ProtectedRequestText): string {
+  const wires = inlineWireTokens(protectedText);
+  return protectedText.assemblySlots.reduce(
+    (text, slot) => text.replaceAll(slot.marker, wires.get(slot.marker) ?? slot.marker),
+    protectedText.text,
+  );
+}
+
+function inlineElementScopes(text: string): {
+  balanced: boolean;
+  scopes: Map<string, { parent: string | undefined; text: string }>;
+} {
+  const scopes = new Map<string, { parent: string | undefined; text: string }>();
+  const stack: string[] = [];
+  for (const token of tokenizeText(text)) {
+    if (token.type !== "tag") {
+      for (const name of stack) {
+        const scope = scopes.get(name);
+        if (scope !== undefined) {
+          scope.text += token.raw;
+        }
+      }
+    } else if (token.tagKind === "close") {
+      if (stack.pop() !== token.name) {
+        return { balanced: false, scopes };
+      }
+    } else {
+      if (scopes.has(token.name)) {
+        return { balanced: false, scopes };
+      }
+      scopes.set(token.name, { parent: stack.at(-1), text: "" });
+      if (token.tagKind === "open") {
+        stack.push(token.name);
+      }
+    }
+  }
+  return { balanced: stack.length === 0, scopes };
+}
+
+function inlineMarkupMismatch(source: string, translation: string): string | undefined {
+  const original = inlineElementScopes(source);
+  const target = inlineElementScopes(translation);
+  if (!original.balanced || !target.balanced) {
+    return "unbalanced-inline-elements";
+  }
+  const internalSentenceBoundary =
+    /[.!?。！？](?:\s+|(?=[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]))\p{L}/u;
+  for (const [name, scope] of original.scopes) {
+    const translated = target.scopes.get(name);
+    if (translated === undefined || translated.parent !== scope.parent) {
+      return "changed-inline-nesting";
+    }
+    if (/[\p{L}\p{N}]/u.test(scope.text) && !/[\p{L}\p{N}]/u.test(translated.text)) {
+      return "empty-inline-element";
+    }
+    if (
+      !internalSentenceBoundary.test(scope.text) &&
+      internalSentenceBoundary.test(translated.text)
+    ) {
+      return "inline-element-absorbed-following-sentence";
+    }
+  }
+  return undefined;
+}
+
 function translationRequestPayload(args: {
   aliasedKey: string;
   effectiveContext: TranslationContext | undefined;
@@ -2657,9 +2901,10 @@ function translationRequestPayload(args: {
     ...(args.protectedText.assemblySlots.length === 0
       ? {}
       : {
-          protectedAssembly: {
-            instruction:
-              "Return plain translated part_N text around the ordered slots; the host reinserts every slot. Nonempty, clause-boundary, and maximum-character fields are hard. Return each localizedNumbers value as only the locale-formatted source numeric atom. Express boundMeaning in the adjacent part. Never copy slots, numeric digits, tags, or Markdown into translationParts.",
+          [args.protectedText.inlineMarkup ? "inlineMarkup" : "protectedAssembly"]: {
+            instruction: args.protectedText.inlineMarkup
+              ? "Return translationTemplate as the complete translated HTML block. Translate all prose, including text inside elements. Preserve every tag and protected marker exactly once. Move a paired element with its translated phrase as target grammar requires, retaining its original nesting and scope. Never absorb following sentences into an element. Keep numbers and other protected values inside their original elements. Leave numeric markers in the template and return their locale-formatted values in localizedNumbers; never write digits elsewhere. Read the assembled paragraph to check completeness, natural grammar and punctuation before returning."
+              : "Return plain translated part_N text around the ordered slots; the host reinserts every slot. Nonempty, clause-boundary, and maximum-character fields are hard. Return each localizedNumbers value as only the locale-formatted source numeric atom. Express boundMeaning in the adjacent part. Never copy slots, numeric digits, tags, or Markdown into translationParts.",
             ...(args.protectedText.numerics.length === 0
               ? {}
               : {
@@ -2678,18 +2923,24 @@ function translationRequestPayload(args: {
                     ]),
                   ),
                 }),
-            parts: Array.from(
-              { length: args.protectedText.assemblySlots.length + 1 },
-              (_, index) => `part_${String(index)}`,
-            ),
-            ...(Object.keys(partMaximumCharacters).length === 0 ? {} : { partMaximumCharacters }),
-            requiredNonEmptyParts: protectedAssemblySourceParts(args.protectedText).flatMap(
-              (part, index) => (part.trim().length === 0 ? [] : [`part_${String(index)}`]),
-            ),
-            requiredClauseBoundaryParts: protectedAssemblyClauseBoundaryPartIndices(
-              args.protectedText,
-            ).map((index) => `part_${String(index)}`),
-            slots: args.protectedText.assemblySlots.map(({ marker }) => marker),
+            ...(args.protectedText.inlineMarkup
+              ? {}
+              : {
+                  parts: Array.from(
+                    { length: args.protectedText.assemblySlots.length + 1 },
+                    (_, index) => `part_${String(index)}`,
+                  ),
+                  ...(Object.keys(partMaximumCharacters).length === 0
+                    ? {}
+                    : { partMaximumCharacters }),
+                  requiredNonEmptyParts: protectedAssemblySourceParts(args.protectedText).flatMap(
+                    (part, index) => (part.trim().length === 0 ? [] : [`part_${String(index)}`]),
+                  ),
+                  requiredClauseBoundaryParts: protectedAssemblyClauseBoundaryPartIndices(
+                    args.protectedText,
+                  ).map((index) => `part_${String(index)}`),
+                  slots: args.protectedText.assemblySlots.map(({ marker }) => marker),
+                }),
           },
         }),
     ...(args.request.selfCheckPlans === undefined
@@ -2697,7 +2948,9 @@ function translationRequestPayload(args: {
       : {
           semanticSelfCheck: semanticSelfCheckPayload(args.request.selfCheckPlans),
         }),
-    text: args.protectedText.text,
+    text: args.protectedText.inlineMarkup
+      ? inlineSourceTemplate(args.protectedText)
+      : args.protectedText.text,
   };
 }
 
@@ -2755,8 +3008,9 @@ function buildSystemPrompt(
       ? `Project-specific translation instructions:\n${customPromptText}`
       : "",
     `Preserve placeholders, component tags, HTML tags, spacing conventions, protected Markdown destination markers such as ](__AI_TRANSLATE_MD_DESTINATION_0__), and overall meaning.`,
-    `AI_TRANSLATE_PRESERVE, AI_TRANSLATE_STRUCTURE, and AI_TRANSLATE_NUMBER markers identify host-owned slots; handle them only through protectedAssembly as described next.`,
+    `AI_TRANSLATE_PRESERVE, AI_TRANSLATE_STRUCTURE, and AI_TRANSLATE_NUMBER markers identify host-owned slots; handle them through protectedAssembly or inlineMarkup as specified by that request.`,
     `When a request includes protectedAssembly, return every required translationParts field instead of a translation string. Read the full template for context, split the translated sentence at the protected slots, and put only the surrounding translated text in the ordered parts. For every numericFields entry, return its complete locale-formatted numeric atom in the matching required localizedNumbers field, preserving its value, range, bound, currency, percent, and qualifiers. The host validates and interleaves exact literals, structural tokens, and localized numbers; never copy a slot marker or slot value inside a translation part.`,
+    `When a request includes inlineMarkup, return translationTemplate as complete translated HTML with the original tag aliases and protected markers. Translate all text inside and outside elements; preserve each element's meaning, scope and nesting. Keep numeric markers in the template and return their locale-formatted atoms in localizedNumbers.`,
     `Treat a source quantity written as N+ or N%+ as inclusive (at least N), never as the stricter more than N. Keep that inclusive meaning when replacing symbolic plus notation with natural target-language wording.`,
     `NUMERIC CLOSED WORLD: every target year, date, quantity, price, percentage, range, lower or upper bound, and alphanumeric code must be source-derived. Never add a current year or any other numeral for SEO freshness. If the source request contains no numeric fact, the translation must not invent one.`,
     `REQUEST ISOLATION AND BRAND CLOSED WORLD: translate each request only from that request's English source and request-specific context. Never borrow a fact, named company, product, payment network, card scheme, platform, or brand from a sibling request, the shared project context, or general knowledge. A named entity may appear in the target only when it appears in that same request's English source or is an explicit required value for that request.`,
@@ -2820,8 +3074,8 @@ export interface TranslationOutputContractMaterial {
     readonly requestContext: readonly string[];
   };
   readonly responseFormat: unknown;
-  /** 24 = model-visible generation contract only (no transport/batching). */
-  readonly schemaVersion: 24;
+  /** 25 = complete inline HTML templates with host-owned protected values. */
+  readonly schemaVersion: 25;
 }
 
 export const TRANSLATION_OUTPUT_CONTRACT_MATERIAL: TranslationOutputContractMaterial = {
@@ -2834,6 +3088,8 @@ export const TRANSLATION_OUTPUT_CONTRACT_MATERIAL: TranslationOutputContractMate
       digitFreeRequiredPattern,
       translationCompletionOptions,
       prefersLowLatencyReasoning,
+      isFastLaneRequest,
+      JSON.stringify([...FAST_LANE_CONTENT_ROLES]),
     ].map((value) => value.toString()),
     protectedText: [
       // Only model-facing protection and schema assembly. Host restore and
@@ -2857,6 +3113,9 @@ export const TRANSLATION_OUTPUT_CONTRACT_MATERIAL: TranslationOutputContractMate
       redactProtectedLiteralContext,
       formatTranslationContext,
       semanticSelfCheckPayload,
+      inlineSourceTemplate,
+      inlineTagSlot,
+      inlineWireTokens,
       hasValidatorFeedback,
       systemPromptContext,
       resolveUserRequestContext,
@@ -2884,7 +3143,7 @@ export const TRANSLATION_OUTPUT_CONTRACT_MATERIAL: TranslationOutputContractMate
       ),
     ),
   },
-  schemaVersion: 24,
+  schemaVersion: 25,
 };
 
 export function createTranslationOutputContractRevision(
@@ -2950,11 +3209,99 @@ export function createSemanticAuditOutputContractRevision(
 export const SEMANTIC_AUDIT_OUTPUT_CONTRACT_REVISION: string =
   createSemanticAuditOutputContractRevision();
 
+function protectedSlotParents(slots: readonly ProtectedAssemblySlot[]): Map<string, string> {
+  const parents = new Map<string, string>();
+  const stack: string[] = [];
+  for (const slot of slots) {
+    if (!inlineTagSlot(slot)) {
+      parents.set(slot.marker, stack.join("\u0000"));
+    }
+    for (const token of tokenizeText(slot.raw)) {
+      if (token.type === "tag" && token.tagKind === "open") {
+        stack.push(token.name);
+      } else if (token.type === "tag" && token.tagKind === "close") {
+        stack.pop();
+      }
+    }
+  }
+  return parents;
+}
+
+function assembleInlineTemplate(
+  protectedText: ProtectedRequestText,
+  output: ParsedTranslationOutput,
+): string | undefined {
+  let template = output.translationTemplate;
+  if (template === undefined) {
+    return undefined;
+  }
+  const wires = inlineWireTokens(protectedText);
+  const wireToken = (slot: ProtectedAssemblySlot): string => wires.get(slot.marker) ?? slot.marker;
+  for (const wire of wires.values()) {
+    if (!wire.startsWith("</") || template.includes(wire)) {
+      continue;
+    }
+    const prefix = wire.slice(0, -1);
+    const missingDelimiter = new RegExp(`${escapeRegExp(prefix)}(?=[.,;:!?。！？)]|$)`, "u");
+    if (occurrenceCount(template, prefix) === 1) {
+      template = template.replace(missingDelimiter, wire);
+    }
+  }
+  let prose = template;
+  for (const slot of protectedText.assemblySlots) {
+    const token = wireToken(slot);
+    if (occurrenceCount(template, token) !== 1) {
+      return undefined;
+    }
+    prose = prose.replaceAll(token, "");
+  }
+  // Numbers can only enter through the validated fields below. This also
+  // catches invented digits outside a protected element or numeric marker.
+  if (/\p{N}|AI_TRANSLATE_(?:NUMBER|PRESERVE|STRUCTURE)/u.test(prose)) {
+    return undefined;
+  }
+  const sourceParents = protectedSlotParents(protectedText.assemblySlots);
+  const orderedSlots = protectedText.assemblySlots.toSorted(
+    (a, b) => template.indexOf(wireToken(a)) - template.indexOf(wireToken(b)),
+  );
+  const targetParents = protectedSlotParents(orderedSlots);
+  if ([...sourceParents].some(([marker, parent]) => targetParents.get(marker) !== parent)) {
+    return undefined;
+  }
+  const numbers = new Map<string, string>();
+  for (const [index, numeric] of protectedText.numerics.entries()) {
+    const value = output.localizedNumbers?.[`number_${String(index)}`];
+    if (value === undefined || !localizedNumericPreservesSourceValue(value, numeric.raw)) {
+      return undefined;
+    }
+    numbers.set(numeric.marker, value.trim());
+  }
+  const replacements = new Map(
+    protectedText.assemblySlots.map((slot) => [
+      wireToken(slot),
+      numbers.get(slot.marker) ?? slot.replacement ?? slot.raw,
+    ]),
+  );
+  const assembled = template.replace(
+    new RegExp([...replacements.keys()].map(escapeRegExp).join("|"), "gu"),
+    (wire) => replacements.get(wire) ?? wire,
+  );
+  return protectedText.literalExpectations.some(
+    ({ raw, occurrences }) => protectedLiteralOccurrenceCount(assembled, raw) !== occurrences,
+  )
+    ? undefined
+    : assembled;
+}
+
 function assembleProtectedTranslation(
   protectedText: ProtectedRequestText,
   output: ParsedTranslationOutput,
   locale: string,
 ): string | undefined {
+  if (protectedText.inlineMarkup && protectedText.assemblySlots.length > 0) {
+    return assembleInlineTemplate(protectedText, output);
+  }
+  const assemblySlots = protectedText.assemblySlots;
   if (output.translation !== undefined) {
     return output.translation;
   }
@@ -2968,9 +3315,9 @@ function assembleProtectedTranslation(
   if (!parts.every((part): part is string => typeof part === "string")) {
     return undefined;
   }
-  const missingClauseBoundaryPart = protectedAssemblyClauseBoundaryPartIndices(protectedText).find(
-    (index) => !/[.!?…;:。！？]/u.test(parts[index] ?? ""),
-  );
+  const missingClauseBoundaryPart = (
+    protectedText.inlineMarkup ? [] : protectedAssemblyClauseBoundaryPartIndices(protectedText)
+  ).find((index) => !/[.!?…;:。！？]/u.test(parts[index] ?? ""));
   if (missingClauseBoundaryPart !== undefined) {
     return undefined;
   }
@@ -2990,7 +3337,7 @@ function assembleProtectedTranslation(
     protectedText.numerics.map(({ marker, raw }) => [marker, raw] as const),
   );
   const boundarySafeParts = [...parts];
-  protectedText.assemblySlots.forEach((slot, index) => {
+  assemblySlots.forEach((slot, index) => {
     if (slot.trimBefore === true) {
       boundarySafeParts[index] = boundarySafeParts[index]?.trimEnd() ?? "";
     }
@@ -3024,7 +3371,7 @@ function assembleProtectedTranslation(
   );
   return cleanParts
     .map((rawPart, index) => {
-      const protectedSlot = protectedText.assemblySlots[index];
+      const protectedSlot = assemblySlots[index];
       let part = rawPart;
       let slot =
         protectedSlot === undefined
@@ -3106,7 +3453,11 @@ function protectedAssemblyFailureReason(
 }
 
 export class StructuredTranslationProvider implements TranslationProvider {
+  readonly reportsRequestMetrics = true;
+  private readonly adaptiveBatching: boolean;
   private readonly batchSize: number;
+  private readonly maxEstimatedOutputTokensPerBatch: number;
+  private readonly inFlight = new Map<string, Promise<TranslationFlight>>();
   private readonly concurrentRequests: number;
   private readonly maxCharsPerBatch: number;
   private readonly maxCompletionTokens: number;
@@ -3128,15 +3479,23 @@ export class StructuredTranslationProvider implements TranslationProvider {
   private readonly transport: StructuredCompletionTransport;
 
   constructor(options: StructuredTranslationProviderOptions) {
+    this.adaptiveBatching = options.batchSize === undefined || options.batchSize === "adaptive";
     this.batchSize = requirePositiveIntegerOption(
       "batchSize",
-      options.batchSize ?? DEFAULT_TRANSLATION_EXECUTION_OPTIONS.batchSize,
+      typeof options.batchSize === "number"
+        ? options.batchSize
+        : MAX_ADAPTIVE_BATCH_SIZE,
+    );
+    this.maxEstimatedOutputTokensPerBatch = requirePositiveIntegerOption(
+      "maxEstimatedOutputTokensPerBatch",
+      options.maxEstimatedOutputTokensPerBatch ??
+        DEFAULT_TRANSLATION_EXECUTION_OPTIONS.maxEstimatedOutputTokensPerBatch,
     );
     const requestTimeoutMs = requirePositiveIntegerOption(
       "requestTimeoutMs",
       options.requestTimeoutMs ?? DEFAULT_TRANSLATION_EXECUTION_OPTIONS.requestTimeoutMs,
     );
-    this.transport = options.transport;
+    this.transport = measuredTransport(options.transport, options.onRequest);
     this.concurrentRequests = requirePositiveIntegerOption(
       "concurrentRequests",
       options.concurrentRequests ?? DEFAULT_TRANSLATION_EXECUTION_OPTIONS.concurrentRequests,
@@ -3168,53 +3527,101 @@ export class StructuredTranslationProvider implements TranslationProvider {
     locale: string;
     requests: readonly TranslationRequest[];
   }): Promise<readonly TranslationResponse[]> {
+    if (new Set(args.requests.map(({ key }) => key)).size !== args.requests.length) {
+      throw new Error("Translation requests must have unique keys.");
+    }
+    const coalesced = coalesceTranslationBatch(args.requests, args.batchContext);
+    const runCache = getProviderRunCache<TranslationFlight>(this);
+    const cache = runCache ?? this.inFlight;
+    const owned = new Map<
+      string,
+      {
+        signature: string;
+        resolve: (result: TranslationFlight) => void;
+        response?: TranslationResponse;
+      }
+    >();
+    const flights = coalesced.batch.map((request) => {
+      const signature = JSON.stringify([
+        args.locale,
+        normalizeTranslationContext(args.batchContext) ?? null,
+        args.glossary ?? [],
+        translationRequestCoalescingSignature(request, args.batchContext),
+      ]);
+      let flight = cache.get(signature);
+      if (flight === undefined) {
+        flight = new Promise<TranslationFlight>((resolve) => {
+          owned.set(request.key, { signature, resolve });
+        });
+        cache.set(signature, flight);
+      }
+      return { request, flight };
+    });
     const batches = createBatches(
-      args.requests,
+      coalesced.batch.filter(({ key }) => owned.has(key)),
       this.batchSize,
       this.maxCharsPerBatch,
       args.batchContext,
+      this.adaptiveBatching ? this.concurrentRequests : undefined,
+      this.maxEstimatedOutputTokensPerBatch,
     );
-    const completed = new Map<string, TranslationResponse>();
     let translationError: unknown;
     try {
       await runWithConcurrency(batches, this.concurrentRequests, async (batch, index) => {
-        const coalesced = coalesceTranslationBatch(batch, args.batchContext);
         const requestArgs = {
-          batch: coalesced.batch,
+          batch,
           ...(args.batchContext === undefined ? {} : { batchContext: args.batchContext }),
           ...(args.batchKey === undefined ? {} : { batchKey: args.batchKey }),
           batchIndex: index,
           ...(args.glossary === undefined ? {} : { glossary: args.glossary }),
           locale: args.locale,
         };
-        const responses = expandCoalescedTranslationResponses(
-          coalesced,
-          await this.translateBatchWithRetries(requestArgs),
-        );
+        const responses = await this.translateBatchWithRetries(requestArgs);
         for (const response of responses) {
-          completed.set(response.key, response);
+          const owner = owned.get(response.key);
+          if (owner !== undefined) {
+            owner.response = response;
+            owner.resolve({ response });
+          }
         }
       });
     } catch (error) {
       translationError = error;
     }
 
+    for (const owner of owned.values()) {
+      owner.resolve(
+        owner.response === undefined ? { error: translationError } : { response: owner.response },
+      );
+      // Failed candidates may be attempted again. Completed results live only
+      // for the current sync; outside a sync, only overlapping calls coalesce.
+      if (runCache === undefined || owner.response === undefined) {
+        cache.delete(owner.signature);
+      }
+    }
+    const completed: TranslationResponse[] = [];
+    for (const { request, flight } of flights) {
+      const result = await flight;
+      translationError ??= result.error;
+      if (result.response !== undefined) {
+        completed.push({ ...result.response, key: request.key });
+      }
+    }
+
     // Preserve every completed concurrent batch in the core candidate cache.
     // Missing keys remain failed in the same transaction, so the release still
     // stops immediately without discarding already-paid successful responses.
-    if (completed.size === 0 && translationError !== undefined) {
+    if (completed.length === 0 && translationError !== undefined) {
       // Rethrown verbatim: wrapping it would replace the original error and its
       // stack with a stringified copy.
       // oxlint-disable-next-line no-throw-literal
       throw translationError;
     }
-    return args.requests.flatMap((request) => {
-      const response = completed.get(request.key);
-      return response === undefined ? [] : [response];
-    });
+    return expandCoalescedTranslationResponses(coalesced, completed);
   }
 
   protected async translateBatch(args: {
+    attempt?: number;
     batch: ProviderBatch;
     batchContext?: TranslationContext;
     batchKey?: string;
@@ -3271,6 +3678,8 @@ export class StructuredTranslationProvider implements TranslationProvider {
     const parsed = await this.requestLimiter.run(() =>
       runWithWallClockTimeout(this.requestTimeoutMs, (signal) =>
         this.transport.complete({
+          attempt: args.attempt ?? 1,
+          operation: "translation",
           messages: [
             {
               content: systemPrompt,
@@ -3313,6 +3722,7 @@ export class StructuredTranslationProvider implements TranslationProvider {
           }),
           schema: translationResponseSchema(
             args.batch.map((request) => ({
+              inlineMarkup: request.inlineMarkup === true,
               candidateCount: protectedCandidateCount(
                 request,
                 protectedRequestText.get(request.key) ??
@@ -3425,7 +3835,7 @@ export class StructuredTranslationProvider implements TranslationProvider {
       }
       if (
         request.selfCheckPlans !== undefined &&
-        (!("verified" in translation) || ! translation.verified)
+        (!("verified" in translation) || !translation.verified)
       ) {
         invalidReasons.set(originalKey, "missing-generator-self-check");
         continue;
@@ -3451,11 +3861,18 @@ export class StructuredTranslationProvider implements TranslationProvider {
           protectedText,
           assembled,
           args.locale,
-          output.translationParts !== undefined,
+          output.translationParts !== undefined || output.translationTemplate !== undefined,
         );
         if (restored === undefined) {
           candidateFailures.push(`candidate-${String(candidateIndex)}:unrestorable-protected-text`);
           return;
+        }
+        if (request.inlineMarkup) {
+          const mismatch = inlineMarkupMismatch(request.sourceText, restored);
+          if (mismatch !== undefined) {
+            candidateFailures.push(`candidate-${String(candidateIndex)}:${mismatch}`);
+            return;
+          }
         }
         const leakedLiteral = crossRequestProtectedLiteral({
           batch: args.batch,
@@ -3556,6 +3973,7 @@ export class StructuredTranslationProvider implements TranslationProvider {
         async (batch) => {
           try {
             const responses = await this.translateBatch({
+              attempt,
               batch,
               ...(args.batchContext === undefined ? {} : { batchContext: args.batchContext }),
               ...(args.batchKey === undefined ? {} : { batchKey: args.batchKey }),
@@ -3696,7 +4114,7 @@ export class StructuredSemanticAuditProvider implements SemanticAuditProvider {
       "requestTimeoutMs",
       options.requestTimeoutMs ?? DEFAULT_TRANSLATION_EXECUTION_OPTIONS.requestTimeoutMs,
     );
-    this.transport = options.transport;
+    this.transport = measuredTransport(options.transport, options.onRequest);
     this.concurrentRequests = requirePositiveIntegerOption(
       "concurrentRequests",
       options.concurrentRequests ?? DEFAULT_TRANSLATION_EXECUTION_OPTIONS.concurrentRequests,
@@ -3887,6 +4305,7 @@ export class StructuredSemanticAuditProvider implements SemanticAuditProvider {
   }
 
   protected async auditBatch(args: {
+    attempt?: number;
     auditId: string;
     batch: SemanticAuditBatch;
     locale: string;
@@ -3906,6 +4325,8 @@ export class StructuredSemanticAuditProvider implements SemanticAuditProvider {
     const parsed: unknown = await this.requestLimiter.run(() =>
       runWithWallClockTimeout(this.requestTimeoutMs, (signal) =>
         this.transport.complete({
+          attempt: args.attempt ?? 1,
+          operation: "audit",
           messages: [
             {
               content: buildSemanticAuditSystemPrompt(promptArgs, customPrompt),
@@ -4010,6 +4431,7 @@ export class StructuredSemanticAuditProvider implements SemanticAuditProvider {
             return {
               batch: pendingBatch,
               result: await this.auditBatch({
+                attempt,
                 auditId: args.auditId,
                 batch: pendingBatch,
                 locale: args.locale,

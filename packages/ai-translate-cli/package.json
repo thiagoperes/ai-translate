@@ -1,6 +1,6 @@
 {
   "name": "@ai-translate/cli",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Command-line interface for ai-translate: validate, check, audit, and sync localized content generated from a single source locale.",
   "keywords": [
     "i18n",

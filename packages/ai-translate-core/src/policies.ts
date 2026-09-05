@@ -6,7 +6,29 @@ import type {
   TranslationConstraint,
   TranslationContext,
   TranslationContextRule,
+  TranslationContentRole,
+  TranslationContentRoleArgs,
+  TranslationContentRoleResolver,
 } from "./types";
+
+export function resolveContentRole(
+  args: TranslationContentRoleArgs & { resolver?: TranslationContentRoleResolver | undefined },
+): TranslationContentRole | undefined {
+  if (args.resolver !== undefined) {
+    return args.resolver(args);
+  }
+  const role = args.entry.meta?.contentRole;
+  return role === "body" ||
+    role === "cta" ||
+    role === "heading" ||
+    role === "link-anchor" ||
+    role === "metadata-description" ||
+    role === "metadata-title" ||
+    role === "table-cell" ||
+    role === "ui-label"
+    ? role
+    : undefined;
+}
 
 function splitPattern(pattern: string): string[] {
   if (pattern === "" || pattern === "/") {

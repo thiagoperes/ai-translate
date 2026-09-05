@@ -1,6 +1,6 @@
 {
   "name": "@ai-translate/provider-openai",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "OpenAI translation and semantic-audit providers for ai-translate, with structured output and batching.",
   "keywords": [
     "i18n",

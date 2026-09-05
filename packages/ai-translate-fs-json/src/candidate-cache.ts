@@ -99,6 +99,7 @@ function isAttestedCandidate(
 }
 
 function asGenerationKey(key: {
+  inlineMarkup?: boolean;
   catalogId: string;
   contentRole?: TranslationCandidateCacheKey["contentRole"];
   contentRoleRevision: string;
@@ -117,6 +118,7 @@ function asGenerationKey(key: {
   unitId: string;
 }): TranslationCandidateCacheKey {
   const material = {
+    ...(key.inlineMarkup ? { inlineMarkup: true } : {}),
     catalogId: key.catalogId,
     ...(key.contentRole === undefined ? {} : { contentRole: key.contentRole }),
     contentRoleRevision: key.contentRoleRevision,
@@ -141,9 +143,8 @@ function asGenerationKey(key: {
   };
 }
 
-function isStoredCacheKey(
-  value: unknown
-): value is {
+function isStoredCacheKey(value: unknown): value is {
+  inlineMarkup?: boolean;
   catalogId: string;
   contentRole?: TranslationCandidateCacheKey["contentRole"];
   contentRoleRevision: string;
@@ -167,6 +168,7 @@ function isStoredCacheKey(
   }
   const key = value as Record<string, unknown>;
   return (
+    (key.inlineMarkup === undefined || typeof key.inlineMarkup === "boolean") &&
     typeof key.catalogId === "string" &&
     typeof key.contentRoleRevision === "string" &&
     typeof key.digest === "string" &&

@@ -1,4 +1,5 @@
-import type { TranslationRequest } from "@ai-translate/core/types";
+import type { ProviderTokenUsage, TranslationRequest } from "@ai-translate/core/types";
+import { APICallError } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -54,6 +55,92 @@ function translationRequest(key: string, source: string): TranslationRequest {
 }
 
 describe("createAiSdkTransport", () => {
+  it.each([undefined, 0])("distinguishes unavailable token counts from zero (%s)", async (total) => {
+    const usage: ProviderTokenUsage[] = [];
+    const transport = createAiSdkTransport({
+      model: new MockLanguageModelV4({
+        modelId: "test-model",
+        doGenerate: async () => ({
+          ...reply({ answer: "ja" }),
+          usage: {
+            inputTokens: { total, noCache: total, cacheRead: undefined, cacheWrite: undefined },
+            outputTokens: { total, text: total, reasoning: undefined },
+          },
+        }),
+      }),
+    });
+
+    await expect(transport.complete({
+      messages: [{ content: "x", role: "user" }],
+      modelId: "test-model",
+      schema: z.object({ answer: z.string() }),
+      schemaName: "answer",
+      onUsage: (value) => { usage.push(value); },
+    })).resolves.toEqual({ answer: "ja" });
+    expect(usage).toEqual([total === undefined ? {} : { inputTokens: 0, outputTokens: 0 }]);
+  });
+
+  it.each([true, false])(
+    "reports usage even when structured output is invalid (%s)",
+    async (valid) => {
+      const usage: ProviderTokenUsage[] = [];
+      const transport = createAiSdkTransport({
+        model: new MockLanguageModelV4({
+          modelId: "test-model",
+          doGenerate: async () => ({
+            ...reply(valid ? { answer: "ja" } : { other: "invalid" }),
+            usage: {
+              inputTokens: { total: 120, noCache: 60, cacheRead: 40, cacheWrite: 20 },
+              outputTokens: { total: 30, text: 20, reasoning: 10 },
+            },
+          }),
+        }),
+      });
+      await transport.complete({
+        messages: [{ content: "x", role: "user" }],
+        modelId: "test-model",
+        schema: z.object({ answer: z.string() }),
+        schemaName: "answer",
+        onUsage: (value) => {
+          usage.push(value);
+        },
+      });
+      expect(usage).toEqual([
+        {
+          inputTokens: 120,
+          outputTokens: 30,
+          cachedInputTokens: 40,
+          cacheWriteInputTokens: 20,
+          reasoningTokens: 10,
+        },
+      ]);
+    },
+  );
+
+  it("leaves retryable network failures to the engine instead of retrying invisibly", async () => {
+    const model = new MockLanguageModelV4({
+      modelId: "test-model",
+      doGenerate: async () => {
+        throw new APICallError({
+          message: "limited",
+          url: "https://example.invalid",
+          requestBodyValues: {},
+          statusCode: 429,
+          isRetryable: true,
+        });
+      },
+    });
+    await expect(
+      createAiSdkTransport({ model }).complete({
+        messages: [{ content: "x", role: "user" }],
+        modelId: "test-model",
+        schema: z.object({ answer: z.string() }),
+        schemaName: "answer",
+      }),
+    ).rejects.toThrow("limited");
+    expect(model.doGenerateCalls).toHaveLength(1);
+  });
+
   it("sends the neutral request through the AI SDK and returns the decoded object", async () => {
     const model = new MockLanguageModelV4({
       doGenerate: async () => reply({ answer: "ja" }),

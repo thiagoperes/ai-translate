@@ -1,5 +1,17 @@
 # @ai-translate/provider-ai-sdk
 
+## 0.2.0
+
+### Minor Changes
+
+- Report token usage for successful and invalid structured responses, and disable hidden SDK retries so the shared engine owns the retry budget. Preserve the default three total attempts. Adopt adaptive batching, request deduplication, and complete inline markup translation.
+
+### Patch Changes
+
+- Updated dependencies
+  - @ai-translate/core@0.3.0
+  - @ai-translate/provider-core@0.3.0
+
 ## 0.1.1
 
 ### Patch Changes

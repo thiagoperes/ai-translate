@@ -377,6 +377,49 @@ function markdocStructureDigest(
   return digestValue(JSON.stringify({ body: skeleton, frontmatter: jsonStructure(frontmatter) }));
 }
 
+interface MarkdocNode {
+  type?: string;
+  lines?: number[];
+  children?: MarkdocNode[];
+}
+
+/** Soft wrapping has no Markdown semantics; canonical blocks survive a write/reload unchanged. */
+function canonicalBodyLines(body: string): string[] {
+  const lines = body.split("\n");
+  const spans: { start: number; end: number }[] = [];
+  const contains = (node: MarkdocNode, type: string): boolean =>
+    node.type === type || (node.children ?? []).some((child) => contains(child, type));
+  const visit = (node: MarkdocNode): void => {
+    const start = node.lines?.[0];
+    const end = node.lines?.at(-1);
+    if (
+      node.type === "inline" &&
+      start !== undefined &&
+      end !== undefined &&
+      end > start + 1 &&
+      contains(node, "softbreak") &&
+      !contains(node, "hardbreak") &&
+      !lines.slice(start, end).some((line) => line.includes("{%") || /(?: {2,}|\\)$/u.test(line))
+    ) {
+      spans.push({ start, end });
+      return;
+    }
+    node.children?.forEach(visit);
+  };
+  visit(parseMarkdoc(body) as MarkdocNode);
+  for (const { start, end } of spans.toSorted((a, b) => b.start - a.start)) {
+    const first = lines[start];
+    if (first === undefined) {
+      continue;
+    }
+    const continuation = lines
+      .slice(start + 1, end)
+      .map((line) => line.replace(/^(?: {0,3}>[ \t]?)+/u, "").trim());
+    lines.splice(start, end - start, [first.trimEnd(), ...continuation].join(" "));
+  }
+  return lines;
+}
+
 function createBodyEntries(body: string): {
   bindings: Map<string, BodyBinding>;
   entries: Entry[];
@@ -384,7 +427,7 @@ function createBodyEntries(body: string): {
 } {
   const bindings = new Map<string, BodyBinding>();
   const entries: Entry[] = [];
-  const lines = body.split("\n");
+  const lines = canonicalBodyLines(body);
   let insideFence = false;
 
   lines.forEach((line, index) => {

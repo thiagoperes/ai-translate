@@ -19,20 +19,6 @@ const estimateTokens = (text) => Math.round(text.length / CHARS_PER_TOKEN);
 /** OpenAI only serves a cached prefix once it reaches this many tokens. */
 const PREFIX_CACHE_MINIMUM_TOKENS = 1024;
 
-/**
- * Do not "fix" the low cross-locale shared prefix by moving the locale line
- * further down buildSystemPrompt.
- *
- * buildSystemPrompt is hashed via Function#toString into
- * OPENAI_TRANSLATION_OUTPUT_CONTRACT_MATERIAL, so *any* edit to it - including
- * a pure reordering that changes no rendered output - rotates
- * OPENAI_TRANSLATION_OUTPUT_CONTRACT_REVISION and invalidates the accepted
- * contract revision on every stored entry. On a 246k-record corpus at the
- * measured ~181 tokens/key that is ~45M tokens of revalidation to save the
- * ~16k tokens per sync that cross-locale prefix caching would return. Measure
- * before assuming this trade has changed.
- */
-
 const SOURCE_STRINGS = [
   "Track every request in one place.",
   "Set usage limits per project and per member.",
@@ -53,13 +39,38 @@ function captureClient() {
         completions: {
           parse: (payload) => {
             calls.push(payload);
-            // Answer whatever keys the strict schema demands, so the provider's
-            // own decoder accepts the reply and we measure a complete exchange.
-            const properties =
-              payload.response_format?.json_schema?.schema?.properties?.translations?.properties ??
-              {};
+            const body = JSON.parse(payload.messages.find(({ role }) => role === "user").content);
             const translations = Object.fromEntries(
-              Object.keys(properties).map((key) => [key, { translation: "vertaling" }]),
+              body.requests.map((request) => {
+                const assembly = request.protectedAssembly;
+                if (assembly === undefined) {
+                  return [request.key, { translation: request.text }];
+                }
+                let remaining = request.text;
+                const translationParts = {};
+                assembly.slots.forEach((slot, index) => {
+                  const boundary = remaining.indexOf(slot);
+                  if (boundary < 0) {
+                    throw new Error("Missing protected benchmark slot.");
+                  }
+                  translationParts[`part_${index}`] = remaining.slice(0, boundary);
+                  remaining = remaining.slice(boundary + slot.length);
+                });
+                translationParts[`part_${assembly.slots.length}`] = remaining;
+                const localizedNumbers = Object.fromEntries(
+                  Object.entries(assembly.numericFields ?? {}).map(([key, field]) => [
+                    key,
+                    field.source,
+                  ]),
+                );
+                return [
+                  request.key,
+                  {
+                    translationParts,
+                    ...(Object.keys(localizedNumbers).length ? { localizedNumbers } : {}),
+                  },
+                ];
+              }),
             );
             const parsed = { translations };
             return Promise.resolve({
@@ -72,7 +83,7 @@ function captureClient() {
   };
 }
 
-function buildRequests(count, locale) {
+function buildRequests(count, locale, duplicates = false) {
   return Array.from({ length: count }, (_, index) => ({
     catalogId: "messages",
     key: `key-${index}`,
@@ -83,7 +94,11 @@ function buildRequests(count, locale) {
       jsonPointer: `/section/${index}`,
       unitId: "messages",
     },
-    sourceText: SOURCE_STRINGS[index % SOURCE_STRINGS.length],
+    sourceText:
+      SOURCE_STRINGS[index % SOURCE_STRINGS.length] +
+      (duplicates
+        ? ""
+        : ` Section ${String.fromCharCode(97 + Math.floor(index / 26), 97 + (index % 26))}.`),
     unitId: "messages",
   }));
 }
@@ -111,10 +126,16 @@ function sharedPrefix(texts) {
   return prefix;
 }
 
-async function measureBatchSize(batchSize, keys, locale) {
+async function measureBatchSize(batchSize, keys, locale, duplicates = false) {
   const { calls, client } = captureClient();
   const provider = createOpenAiTranslationProvider({ batchSize, client, model: "bench-model" });
-  await provider.translate({ locale, requests: buildRequests(keys, locale) });
+  const responses = await provider.translate({
+    locale,
+    requests: buildRequests(keys, locale, duplicates),
+  });
+  if (responses.length !== keys) {
+    throw new Error(`Benchmark returned ${responses.length}/${keys} translations.`);
+  }
 
   let systemChars = 0;
   let userChars = 0;
@@ -128,11 +149,11 @@ async function measureBatchSize(batchSize, keys, locale) {
     systemTexts.push(parts.systemText);
   }
 
-  const totalTokens = estimateTokens(
-    "x".repeat(systemChars + userChars + schemaChars),
-  );
+  const totalTokens = estimateTokens("x".repeat(systemChars + userChars + schemaChars));
   return {
     batchSize,
+    duplicates,
+    returnedKeys: responses.length,
     calls: calls.length,
     keys,
     promptOverheadTokensPerKey: Number(
@@ -212,13 +233,14 @@ async function main() {
   const json = process.argv.includes("--json");
   const keys = 240;
   const batches = [];
-  for (const batchSize of [8, 16, 32, 64, 120]) {
+  for (const batchSize of [1, 4, 8, "adaptive"]) {
     batches.push(await measureBatchSize(batchSize, keys, "de"));
   }
   const locales = ["de", "es", "fr"];
   const prefix = await measureCrossLocalePrefix(locales, { productionLike: false });
   const productionPrefix = await measureCrossLocalePrefix(locales, { productionLike: true });
-  const report = { batches, keys, prefix, productionPrefix };
+  const duplicates = await measureBatchSize(1, keys, "de", true);
+  const report = { batches, duplicates, keys, prefix, productionPrefix };
 
   if (json) {
     console.log(JSON.stringify(report, null, 2));
@@ -234,6 +256,9 @@ async function main() {
         `${String(row.promptOverheadTokensPerKey).padStart(19)}   ${String(row.totalTokensPerKey).padStart(16)}`,
     );
   }
+  console.log(
+    `\nduplicate corpus: ${duplicates.calls} calls for ${keys} keys, ${duplicates.returnedKeys} complete responses`,
+  );
   console.log(`\nprefix caching (needs >= ${PREFIX_CACHE_MINIMUM_TOKENS} tokens of exact prefix)`);
   for (const [label, measurement] of [
     ["bare config", prefix],

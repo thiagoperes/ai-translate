@@ -15,9 +15,10 @@ import { createFileTranslationCandidateCache } from "../src/candidate-cache";
 function candidateKey(
   sourceText = "Source",
   revisions: {
+    inlineMarkup?: boolean;
     generationRevision?: string;
     providerRevision?: string;
-  } = {}
+  } = {},
 ): TranslationCandidateCacheKey {
   return createTranslationCandidateCacheKey({
     contentRoleRevision: "body-v1",
@@ -29,6 +30,7 @@ function candidateKey(
     },
     instructionDigest: "instructions-v1",
     request: {
+      ...(revisions.inlineMarkup ? { inlineMarkup: true } : {}),
       catalogId: "messages",
       contentRole: "body",
       key: "/body",
@@ -46,10 +48,29 @@ function candidateKey(
 }
 
 describe("file translation candidate cache", () => {
+  it("keeps inline assembly separate when reading compatible generation revisions", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "candidate-cache-"));
+    try {
+      const source = "Read <a_one>the guide</a_one>.";
+      const plain = candidateKey(source, { generationRevision: "previous" });
+      const inline = candidateKey(source, { generationRevision: "previous", inlineMarkup: true });
+      const current = candidateKey(source, { generationRevision: "current", inlineMarkup: true });
+      const cache = createFileTranslationCandidateCache({ rootDir });
+      await cache.put(plain, "Plain assembly");
+      await cache.put(inline, "Inline assembly");
+      expect(plain.digest).not.toBe(inline.digest);
+      const reopened = createFileTranslationCandidateCache({
+        rootDir,
+        compatibleGenerationRevisions: ["previous"],
+      });
+      await expect(reopened.get(current)).resolves.toBe("Inline assembly");
+    } finally {
+      await fs.rm(rootDir, { force: true, recursive: true });
+    }
+  });
+
   it("persists immutable candidates across cache instances", async () => {
-    const rootDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "candidate-cache-")
-    );
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "candidate-cache-"));
     try {
       const key = candidateKey();
       const first = createFileTranslationCandidateCache({ rootDir });
@@ -64,9 +85,7 @@ describe("file translation candidate cache", () => {
   });
 
   it("persists generation-time self-check attestations separately from legacy text", async () => {
-    const rootDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "candidate-cache-")
-    );
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "candidate-cache-"));
     try {
       const key = candidateKey();
       const candidate = {
@@ -91,9 +110,7 @@ describe("file translation candidate cache", () => {
   });
 
   it("migrates compatible generation revisions without validator identity", async () => {
-    const rootDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "candidate-cache-")
-    );
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "candidate-cache-"));
     try {
       const legacyKey = candidateKey("Compatible attestation", {
         generationRevision: "generation-legacy",
@@ -109,36 +126,25 @@ describe("file translation candidate cache", () => {
         },
         translation: "Attested translation",
       };
-      await createFileTranslationCandidateCache({ rootDir }).putAttested?.(
-        legacyKey,
-        candidate
-      );
+      await createFileTranslationCandidateCache({ rootDir }).putAttested?.(legacyKey, candidate);
 
       const compatible = createFileTranslationCandidateCache({
         compatibleGenerationRevisions: ["generation-legacy"],
         rootDir,
       });
-      await expect(compatible.getAttested?.(currentKey)).resolves.toEqual(
-        candidate
-      );
+      await expect(compatible.getAttested?.(currentKey)).resolves.toEqual(candidate);
 
       const exactOnly = createFileTranslationCandidateCache({ rootDir });
-      await expect(
-        exactOnly.getAttested?.(currentKey)
-      ).resolves.toBeUndefined();
+      await expect(exactOnly.getAttested?.(currentKey)).resolves.toBeUndefined();
       await compatible.putAttested?.(currentKey, candidate);
-      await expect(exactOnly.getAttested?.(currentKey)).resolves.toEqual(
-        candidate
-      );
+      await expect(exactOnly.getAttested?.(currentKey)).resolves.toEqual(candidate);
     } finally {
       await fs.rm(rootDir, { force: true, recursive: true });
     }
   });
 
   it("locates pre-redesign digests that still hashed validator revisions", async () => {
-    const rootDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "candidate-cache-")
-    );
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "candidate-cache-"));
     try {
       const currentKey = candidateKey("Legacy validator digest");
       const legacyProbe = createLegacyTranslationCandidateCacheProbeKey({
@@ -160,7 +166,7 @@ describe("file translation candidate cache", () => {
         ".ai-translate",
         "candidate-cache",
         "v2",
-        legacyProbe.digest.slice(0, 2)
+        legacyProbe.digest.slice(0, 2),
       );
       await fs.mkdir(shard, { recursive: true });
       const legacyStoredKey = {
@@ -179,7 +185,7 @@ describe("file translation candidate cache", () => {
           schemaVersion: 2,
           writtenAt: new Date().toISOString(),
         })}\n`,
-        "utf8"
+        "utf8",
       );
 
       const cache = createFileTranslationCandidateCache({
@@ -198,9 +204,7 @@ describe("file translation candidate cache", () => {
   });
 
   it("migrates explicitly compatible provider revisions", async () => {
-    const rootDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "candidate-cache-")
-    );
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "candidate-cache-"));
     try {
       const legacyKey = candidateKey("Provider migration", {
         providerRevision: "provider-v1",
@@ -215,18 +219,14 @@ describe("file translation candidate cache", () => {
         compatibleProviderRevisions: ["provider-v1"],
         rootDir,
       });
-      await expect(compatible.get(currentKey)).resolves.toBe(
-        "Cached translation"
-      );
+      await expect(compatible.get(currentKey)).resolves.toBe("Cached translation");
     } finally {
       await fs.rm(rootDir, { force: true, recursive: true });
     }
   });
 
   it("probes standalone legacy contracts against current generation cohorts", async () => {
-    const rootDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "candidate-cache-")
-    );
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "candidate-cache-"));
     try {
       const currentKey = candidateKey("Standalone legacy contract");
       const legacyProbe = createLegacyTranslationCandidateCacheProbeKey({
@@ -242,18 +242,16 @@ describe("file translation candidate cache", () => {
         legacyDeterministicContractRevisions: ["contract-standalone"],
         rootDir,
       });
-      await expect(
-        compatible.getAttested?.(currentKey)
-      ).resolves.toMatchObject({ translation: "Standalone legacy translation" });
+      await expect(compatible.getAttested?.(currentKey)).resolves.toMatchObject({
+        translation: "Standalone legacy translation",
+      });
     } finally {
       await fs.rm(rootDir, { force: true, recursive: true });
     }
   });
 
   it("does not cross-multiply pair contract revisions with other pairs' generations", async () => {
-    const rootDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "candidate-cache-")
-    );
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "candidate-cache-"));
     try {
       const currentKey = candidateKey("Pairs stay pairs");
       // Record written under contract A but paired with generation B, a
@@ -283,9 +281,7 @@ describe("file translation candidate cache", () => {
         ],
         rootDir,
       });
-      await expect(
-        compatible.getAttested?.(currentKey)
-      ).resolves.toBeUndefined();
+      await expect(compatible.getAttested?.(currentKey)).resolves.toBeUndefined();
 
       // The exact recorded pair (contract-B, generation-B) is still located.
       const pairProbe = createLegacyTranslationCandidateCacheProbeKey({

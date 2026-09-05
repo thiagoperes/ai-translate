@@ -16,6 +16,7 @@ export default defineConfig({
     "src/policies.ts",
     "src/reconcile.ts",
     "src/sync.ts",
+    "src/telemetry.ts",
     "src/tokens.ts",
     "src/types.ts",
   ],

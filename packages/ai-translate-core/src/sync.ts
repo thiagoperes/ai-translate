@@ -36,6 +36,7 @@ import {
   mergeTranslationContexts,
   normalizeTranslationContext,
   resolvePolicy,
+  resolveContentRole,
   resolveTranslationContext,
 } from "./policies";
 import {
@@ -49,10 +50,8 @@ import {
   getStateHistory,
   removeStateEntriesInPlace,
 } from "./state-operations";
-import {
-  LEGACY_UNVERIFIED_GENERATION_REVISION,
-  supportsScopedSave,
-} from "./types";
+import { LEGACY_UNVERIFIED_GENERATION_REVISION, supportsScopedSave } from "./types";
+import { withProviderTelemetry } from "./telemetry";
 import type {
   AiTranslateConfig,
   CatalogAdapter,
@@ -171,6 +170,7 @@ interface CandidateCacheRunMetrics {
     validationMs: number;
   };
   providerRequestCount: number;
+  providerInvocationCount: number;
 }
 
 const MATERIAL_AUDIT_FAILURES = new Set([
@@ -353,6 +353,7 @@ function createEmptyMetrics(): SyncMetrics & CandidateCacheRunMetrics {
       validationMs: 0,
     },
     providerRequestCount: 0,
+    providerInvocationCount: 0,
     scannedDocuments: 0,
     staleManualEntries: 0,
     translatedEntries: 0,
@@ -983,34 +984,29 @@ async function translateCandidateMisses(args: {
   misses: readonly CandidateMiss[];
 }): Promise<Map<string, CandidateResponse>> {
   const plans = await Promise.all(
-    args.misses.map((miss) =>
-      prepareProviderRequestPlan(args.config, miss, args.cacheMetrics)
-    )
+    args.misses.map((miss) => prepareProviderRequestPlan(args.config, miss, args.cacheMetrics)),
   );
-  const providerRequests = plans.flatMap(
-    ({ providerRequests: requests }) => requests
-  );
+  const providerRequests = plans.flatMap(({ providerRequests: requests }) => requests);
   const providerStartedAt = performance.now();
-  const responses =
-    providerRequests.length === 0
-      ? []
-      : await args.config.provider.translate(
-          buildTranslateArgs({
-            batchContext: resolveBatchContext(providerRequests),
-            batchKey: args.batchKey,
-            config: args.config,
-            locale: args.locale,
-            requests: providerRequests,
-          })
-        );
+  let responses: readonly TranslationResponse[] = [];
   if (providerRequests.length > 0) {
-    args.cacheMetrics.phases.providerMs += performance.now() - providerStartedAt;
-    args.cacheMetrics.providerRequestCount += 1;
+    args.cacheMetrics.providerInvocationCount += 1;
+    try {
+      responses = await args.config.provider.translate(
+        buildTranslateArgs({
+          batchContext: resolveBatchContext(providerRequests),
+          batchKey: args.batchKey,
+          config: args.config,
+          locale: args.locale,
+          requests: providerRequests,
+        }),
+      );
+    } finally {
+      args.cacheMetrics.phases.providerMs += performance.now() - providerStartedAt;
+    }
   }
   assertProviderResponseKeys(providerRequests, responses);
-  const responsesByKey = new Map(
-    responses.map((response) => [response.key, response] as const)
-  );
+  const responsesByKey = new Map(responses.map((response) => [response.key, response] as const));
   const candidates = new Map<string, CandidateResponse>();
   for (const plan of plans) {
     plan.recordResponses(responsesByKey);
@@ -2046,7 +2042,8 @@ async function prepareTask(args: {
     if (includedPaths !== undefined && !includedPaths.has(pointer)) {
       continue;
     }
-    const contentRole = config.contentRole?.({
+    const contentRole = resolveContentRole({
+      resolver: config.contentRole,
       catalogId: document.ref.catalogId,
       entry: sourceEntry,
       locale: document.ref.locale,
@@ -2409,10 +2406,10 @@ async function prepareTask(args: {
         : undefined;
     const request: TranslationRequest = {
       ...requestBase,
+      ...(sourceEntry.meta?.inlineMarkup === true ? { inlineMarkup: true } : {}),
       ...(contentRole === undefined ? {} : { contentRole }),
       ...(requestContext === undefined ? {} : { context: requestContext }),
-      ...(contentRole === undefined ||
-      config.outputContracts?.[contentRole] === undefined
+      ...(contentRole === undefined || config.outputContracts?.[contentRole] === undefined
         ? {}
         : { outputContract: config.outputContracts[contentRole] }),
       /*
@@ -2420,12 +2417,8 @@ async function prepareTask(args: {
        * empty self-check payload per item plus its system-prompt block per
        * batch. Absent and empty mean the same thing to every consumer.
        */
-      ...(selfCheckPlans === undefined || selfCheckPlans.length === 0
-        ? {}
-        : { selfCheckPlans }),
-      ...(sourceEntry.tokens === undefined
-        ? {}
-        : { tokens: sourceEntry.tokens }),
+      ...(selfCheckPlans === undefined || selfCheckPlans.length === 0 ? {} : { selfCheckPlans }),
+      ...(sourceEntry.tokens === undefined ? {} : { tokens: sourceEntry.tokens }),
     };
     const pendingTranslationReason = translationDecision.translate
       ? translationDecision.reason ?? "translation-decision"
@@ -3652,7 +3645,8 @@ async function collectSourceDocumentValidationIssues(args: {
           return [];
         }
         const path = addressToJsonPointer(entry.address);
-        const contentRole = args.config.contentRole?.({
+        const contentRole = resolveContentRole({
+          resolver: args.config.contentRole,
           catalogId: args.catalogId,
           entry,
           locale: args.config.sourceLocale,
@@ -3857,8 +3851,7 @@ export async function validateCatalogs(
             effectivePolicies.get(pointer) ?? sourceEntry.policy;
           if (
             effectivePolicy !== "exclude" &&
-            sourceEntry.meta?.structureSignature !==
-              targetEntry.meta?.structureSignature
+            sourceEntry.meta?.structureSignature !== targetEntry.meta?.structureSignature
           ) {
             issues.push(
               createValidationIssue({
@@ -3869,11 +3862,12 @@ export async function validateCatalogs(
                 message: `Translated entry ${pointer} does not preserve source structure.`,
                 path: targetRef.path,
                 unitId: targetRef.unitId,
-              })
+              }),
             );
           }
 
-          const contentRole = config.contentRole?.({
+          const contentRole = resolveContentRole({
+            resolver: config.contentRole,
             catalogId: catalog.id,
             entry: sourceEntry,
             locale,
@@ -4240,12 +4234,9 @@ export async function syncCatalogs(
   ensureValidConfig(config);
   if (
     options.maxPendingTranslations !== undefined &&
-    (!Number.isSafeInteger(options.maxPendingTranslations) ||
-      options.maxPendingTranslations < 0)
+    (!Number.isSafeInteger(options.maxPendingTranslations) || options.maxPendingTranslations < 0)
   ) {
-    throw new Error(
-      "maxPendingTranslations must be a non-negative safe integer."
-    );
+    throw new Error("maxPendingTranslations must be a non-negative safe integer.");
   }
   const dryRun = options.dryRun ?? false;
   const targetLocales = resolveTargetLocales(config, options);
@@ -4264,32 +4255,30 @@ export async function syncCatalogs(
     ? resolveStateScope(config, options)
     : undefined;
 
+  const metrics = createEmptyMetrics();
+  const providerLatencies: number[] = [];
   const runSync = async (): Promise<SyncResult> => {
-    const metrics = createEmptyMetrics();
     const stateLoadStartedAt = performance.now();
     let state = await config.state.load(saveScope);
     metrics.phases.stateLoadMs += performance.now() - stateLoadStartedAt;
     if (state.version !== 1 && state.version !== 2) {
-      throw new Error(
-        `Unsupported ai-translate state version "${String(state.version)}".`
-      );
+      throw new Error(`Unsupported ai-translate state version "${String(state.version)}".`);
     }
     state = cloneState(state);
     const stateHistoryIndex = buildStateHistoryIndex(state);
 
-    const sourceDocumentPlans: {
-      catalog: CatalogAdapter;
-      sourceDocument: LoadedDocument;
-      sourceIssues: readonly ValidationIssue[];
-    }[] = [];
-
     const catalogScanStartedAt = performance.now();
-    for (const catalog of catalogs) {
-      const sourceRefs = filterSourceRefs(
-        await catalog.listDocumentRefs(config.sourceLocale),
-        options
-      );
-      for (const sourceRef of sourceRefs) {
+    const sourceRefs = (
+      await runWithConcurrency(catalogs, config.concurrency?.documents ?? 4, async (catalog) =>
+        filterSourceRefs(await catalog.listDocumentRefs(config.sourceLocale), options).map(
+          (sourceRef) => ({ catalog, sourceRef }),
+        ),
+      )
+    ).flat();
+    const sourceDocumentPlans = await runWithConcurrency(
+      sourceRefs,
+      config.concurrency?.documents ?? 4,
+      async ({ catalog, sourceRef }) => {
         const sourceDocument = await catalog.loadDocument(sourceRef);
         if (sourceDocument === null) {
           throw new Error(`Missing source document at ${sourceRef.path}.`);
@@ -4299,92 +4288,70 @@ export async function syncCatalogs(
           config,
           sourceDocument,
         });
-        sourceDocumentPlans.push({
+        return {
           catalog,
           sourceDocument,
           sourceIssues:
             options.includePaths === undefined
               ? sourceIssues
               : sourceIssues.filter(({ jsonPointer }) =>
-                  options.includePaths?.includes(jsonPointer)
+                  options.includePaths?.includes(jsonPointer),
                 ),
-        });
-      }
-    }
+        };
+      },
+    );
 
-    const sourceValidationErrors = sourceDocumentPlans.flatMap(
-      ({ sourceIssues }) =>
-        sourceIssues.filter(({ severity }) => severity === "error")
+    const sourceValidationErrors = sourceDocumentPlans.flatMap(({ sourceIssues }) =>
+      sourceIssues.filter(({ severity }) => severity === "error"),
     );
     if (sourceValidationErrors.length > 0) {
-      const documents = sourceDocumentPlans.flatMap(
-        ({ catalog, sourceDocument, sourceIssues }) => {
-          const failedEntries = new Set(
-            sourceIssues
-              .filter(({ severity }) => severity === "error")
-              .map(({ jsonPointer }) => jsonPointer)
-          ).size;
-          return targetLocales.map((locale): DocumentSyncResult => {
-            const targetRef = catalog.createDocumentRef(
-              sourceDocument.ref,
-              locale
-            );
-            return {
-              catalogId: catalog.id,
-              changed: false,
-              copiedEntries: 0,
-              excludedEntries: 0,
-              failedEntries,
-              issues: sourceIssues.map(({ code, message, severity }) => ({
-                code,
-                message,
-                severity,
-              })),
-              locale,
-              path: targetRef.path,
-              staleManualEntries: 0,
-              translatedEntries: 0,
-              unitId: targetRef.unitId,
-              wroteFile: false,
-            };
-          });
-        }
-      );
+      const documents = sourceDocumentPlans.flatMap(({ catalog, sourceDocument, sourceIssues }) => {
+        const failedEntries = new Set(
+          sourceIssues
+            .filter(({ severity }) => severity === "error")
+            .map(({ jsonPointer }) => jsonPointer),
+        ).size;
+        return targetLocales.map((locale): DocumentSyncResult => {
+          const targetRef = catalog.createDocumentRef(sourceDocument.ref, locale);
+          return {
+            catalogId: catalog.id,
+            changed: false,
+            copiedEntries: 0,
+            excludedEntries: 0,
+            failedEntries,
+            issues: sourceIssues.map(({ code, message, severity }) => ({
+              code,
+              message,
+              severity,
+            })),
+            locale,
+            path: targetRef.path,
+            staleManualEntries: 0,
+            translatedEntries: 0,
+            unitId: targetRef.unitId,
+            wroteFile: false,
+          };
+        });
+      });
       metrics.scannedDocuments = documents.length;
       metrics.failedEntries = documents.reduce(
         (total, document) => total + document.failedEntries,
-        0
+        0,
       );
       metrics.durationMs = performance.now() - startedAt;
       return { documents, dryRun, metrics, state };
     }
 
-    const documentPlans: {
-      catalog: CatalogAdapter;
-      existingDocument: LoadedDocument | null;
-      sourceIssues: readonly TranslationValidationIssue[];
-      sourceDocument: LoadedDocument;
-      targetDocument: LoadedDocument;
-    }[] = [];
-
-    for (const {
-      catalog,
-      sourceDocument,
-      sourceIssues,
-    } of sourceDocumentPlans) {
-      for (const locale of targetLocales) {
+    const documentPlans = await runWithConcurrency(
+      sourceDocumentPlans.flatMap((plan) => targetLocales.map((locale) => ({ ...plan, locale }))),
+      config.concurrency?.documents ?? 4,
+      async ({ catalog, sourceDocument, sourceIssues, locale }) => {
         const targetRef = catalog.createDocumentRef(sourceDocument.ref, locale);
         const existingDocument = await catalog.loadDocument(targetRef);
-        // Reconciliation and translation must see the same source, or a unit
-        // the catalog adds for this locale would be written without ever being
-        // translated.
         const localizedSource =
           catalog.localizeSourceDocument === undefined
             ? sourceDocument
-            : await catalog.localizeSourceDocument({
-                locale,
-                source: sourceDocument,
-              });
+            : await catalog.localizeSourceDocument({ locale, source: sourceDocument });
         const targetDocument = await catalog.reconcileDocument({
           history: getStateHistory({
             catalogId: catalog.id,
@@ -4396,7 +4363,7 @@ export async function syncCatalogs(
           source: localizedSource,
           target: existingDocument,
         });
-        documentPlans.push({
+        return {
           catalog,
           existingDocument,
           sourceDocument: localizedSource,
@@ -4406,9 +4373,9 @@ export async function syncCatalogs(
             severity,
           })),
           targetDocument,
-        });
-      }
-    }
+        };
+      },
+    );
 
     metrics.phases.catalogScanMs += performance.now() - catalogScanStartedAt;
     metrics.scannedDocuments = documentPlans.length;
@@ -4425,7 +4392,7 @@ export async function syncCatalogs(
           sourceIssues: plan.sourceIssues,
           sourceDocument: plan.sourceDocument,
           state,
-        })
+        }),
     );
     for (const task of preparedTasks) {
       for (const item of task.items) {
@@ -4436,10 +4403,8 @@ export async function syncCatalogs(
     }
     const pendingTranslationCount = preparedTasks.reduce(
       (total, task) =>
-        total +
-        task.items.filter(({ status }) => status === "pending-translation")
-          .length,
-      0
+        total + task.items.filter(({ status }) => status === "pending-translation").length,
+      0,
     );
     if (
       options.maxPendingTranslations !== undefined &&
@@ -4448,16 +4413,16 @@ export async function syncCatalogs(
       const reasons = Object.entries(metrics.invalidationReasons ?? {})
         .toSorted(
           ([leftReason, leftCount], [rightReason, rightCount]) =>
-            rightCount - leftCount || leftReason.localeCompare(rightReason)
+            rightCount - leftCount || leftReason.localeCompare(rightReason),
         )
         .map(([reason, count]) => `${reason}=${String(count)}`)
         .join(", ");
       throw new Error(
         `Translation safety budget exceeded before provider calls: planned ${String(
-          pendingTranslationCount
+          pendingTranslationCount,
         )} translations, limit ${String(options.maxPendingTranslations)}${
           reasons.length > 0 ? ` (${reasons})` : ""
-        }. Narrow the scope or use an explicitly unbounded release/full-sync command.`
+        }. Narrow the scope or use an explicitly unbounded release/full-sync command.`,
       );
     }
 
@@ -4470,23 +4435,16 @@ export async function syncCatalogs(
     for (const task of translatedTasks) {
       let resolvedTask = task;
       const changed = valuesDiffer(task.existingDocument, task.document);
-      const hasFailedItems = task.items.some(
-        (item) => item.status === "failed"
-      );
+      const hasFailedItems = task.items.some((item) => item.status === "failed");
       let wroteFile = false;
 
       if (changed && !dryRun && !hasFailedItems) {
         await task.catalog.writeDocument(task.document);
         wroteFile = true;
 
-        const persistedDocument = await task.catalog.loadDocument(
-          task.document.ref
-        );
+        const persistedDocument = await task.catalog.loadDocument(task.document.ref);
         if (persistedDocument) {
-          resolvedTask = syncTaskStateWithPersistedDocument(
-            task,
-            persistedDocument
-          );
+          resolvedTask = syncTaskStateWithPersistedDocument(task, persistedDocument);
         }
       }
 
@@ -4498,7 +4456,7 @@ export async function syncCatalogs(
         summarizeTask(resolvedTask, {
           dryRun,
         }),
-        wroteFile
+        wroteFile,
       );
       results.push(summary);
       if (summary.changed) {
@@ -4517,6 +4475,18 @@ export async function syncCatalogs(
       metrics.phases.stateWriteMs += performance.now() - stateWriteStartedAt;
     }
 
+    if (providerLatencies.length > 0) {
+      providerLatencies.sort((a, b) => a - b);
+      const percentile = (p: number): number =>
+        Math.round(
+          providerLatencies[Math.max(0, Math.ceil(providerLatencies.length * p) - 1)] ?? 0,
+        );
+      metrics.providerLatency = {
+        p50Ms: percentile(0.5),
+        p95Ms: percentile(0.95),
+        p99Ms: percentile(0.99),
+      };
+    }
     metrics.durationMs = Math.round(performance.now() - startedAt);
     metrics.phases.cacheLookupMs = Math.round(metrics.phases.cacheLookupMs);
     metrics.phases.catalogScanMs = Math.round(metrics.phases.catalogScanMs);
@@ -4524,15 +4494,44 @@ export async function syncCatalogs(
     metrics.phases.stateLoadMs = Math.round(metrics.phases.stateLoadMs);
     metrics.phases.stateWriteMs = Math.round(metrics.phases.stateWriteMs);
     metrics.phases.validationMs = Math.round(metrics.phases.validationMs);
+    const { providerRequestCount, ...reportedMetrics } = metrics;
     return {
       documents: results,
       dryRun,
-      metrics,
+      metrics: {
+        ...reportedMetrics,
+        ...(metrics.providerInvocationCount > 0 && config.provider.reportsRequestMetrics !== true
+          ? {}
+          : { providerRequestCount }),
+      },
       state,
     };
   };
 
-  return options.assumeStateLock === true
-    ? runSync()
-    : config.state.withLock(runSync);
+  const execute = (): Promise<SyncResult> =>
+    withProviderTelemetry((request) => {
+      metrics.providerRequestCount += 1;
+      metrics.providerRetryCount =
+        (metrics.providerRetryCount ?? 0) + (request.attempt > 1 ? 1 : 0);
+      metrics.providerFailedRequestCount =
+        (metrics.providerFailedRequestCount ?? 0) + (request.failed ? 1 : 0);
+      providerLatencies.push(request.durationMs);
+      if (request.usage !== undefined) {
+        const usage = (metrics.providerUsage ??= { requestsWithUsage: 0 });
+        usage.requestsWithUsage += 1;
+        for (const field of [
+          "inputTokens",
+          "outputTokens",
+          "cachedInputTokens",
+          "cacheWriteInputTokens",
+          "reasoningTokens",
+        ] as const) {
+          const value = request.usage[field];
+          if (value !== undefined) {
+            usage[field] = (usage[field] ?? 0) + value;
+          }
+        }
+      }
+    }, runSync);
+  return options.assumeStateLock === true ? execute() : config.state.withLock(execute);
 }

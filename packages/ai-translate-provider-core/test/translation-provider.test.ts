@@ -308,9 +308,10 @@ describe("TestTranslationProvider", () => {
     expect(parse).not.toHaveBeenCalled();
   });
 
-  it("defaults to one-shot, latency-first execution", async () => {
+  it("defaults to adaptive batching without retries or lost parallelism", async () => {
     expect(DEFAULT_TRANSLATION_EXECUTION_OPTIONS).toEqual({
-      batchSize: 1,
+      batchSize: "adaptive",
+      maxEstimatedOutputTokensPerBatch: 2_048,
       concurrentRequests: 32,
       maxCharsPerBatch: 2_000,
       maxCompletionTokens: 8_192,
@@ -643,7 +644,7 @@ describe("TestTranslationProvider", () => {
       keys.map((key) =>
         provider.translate({
           locale: "de",
-          requests: [createRequest(key, "Hello")],
+          requests: [createRequest(key, `Hello ${key}`)],
         }),
       ),
     );
@@ -692,7 +693,7 @@ describe("TestTranslationProvider", () => {
 
     const result = await provider.translate({
       locale: "de",
-      requests: ["a", "b", "c", "d"].map((key) => createRequest(key, "Hello")),
+      requests: ["a", "b", "c", "d"].map((key) => createRequest(key, `Hello ${key}`)),
     });
     activeAtResolution = activeRequests;
     await new Promise((resolve) => { setTimeout(resolve, 35); });
@@ -770,7 +771,7 @@ describe("TestTranslationProvider", () => {
       locale: "fr",
       requests: [
         createRequest("a", "123456"),
-        createRequest("b", "123456"),
+        createRequest("b", "654321"),
         createRequest("c", "1234"),
       ],
     });
@@ -967,7 +968,7 @@ describe("TestTranslationProvider", () => {
     expect(request.temperature).toBe(0.6);
   });
 
-  it("uses the low-latency Luna lane for short schema-constrained interface copy", async () => {
+  it("keeps heading interpretation on the configured reasoning lane", async () => {
     const { transport, parse } = createMockTransport(() => ({
       choices: [
         {
@@ -996,7 +997,7 @@ describe("TestTranslationProvider", () => {
     });
 
     expect(parse.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ reasoningEffort: "low" }),
+      expect.objectContaining({ reasoningEffort: "medium" }),
     );
   });
 

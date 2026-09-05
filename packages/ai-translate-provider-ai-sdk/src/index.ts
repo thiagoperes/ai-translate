@@ -14,6 +14,7 @@ import {
   NoObjectGeneratedError,
   type JSONValue,
   type LanguageModel,
+  type LanguageModelUsage,
 } from "ai";
 
 export {
@@ -96,6 +97,7 @@ export function createAiSdkTransport(
         .join("\n\n");
       try {
         const result = await generateObject({
+          maxRetries: 0,
           messages: request.messages
             .filter((message) => message.role !== "system")
             .map((message) => ({ content: message.content, role: "user" as const })),
@@ -110,12 +112,14 @@ export function createAiSdkTransport(
           ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
           providerOptions: mergeProviderOptions(request, options.providerOptions),
         });
+        reportUsage(request, result.usage);
         return result.object;
       } catch (error) {
         // The engine reads an absent payload as a retryable batch failure and
         // repairs it, which is the better outcome than surfacing a raw parse
         // error to the caller mid-sync.
         if (NoObjectGeneratedError.isInstance(error)) {
+          reportUsage(request, error.usage);
           return undefined;
         }
         throw error;
@@ -123,6 +127,23 @@ export function createAiSdkTransport(
     },
     label: "The model",
   };
+}
+
+function reportUsage(
+  request: StructuredCompletionRequest,
+  usage: LanguageModelUsage | undefined,
+): void {
+  if (usage === undefined) {return;}
+  request.onUsage?.({
+    ...(usage.inputTokens === undefined ? {} : { inputTokens: usage.inputTokens }),
+    ...(usage.outputTokens === undefined ? {} : { outputTokens: usage.outputTokens }),
+    ...(usage.inputTokenDetails?.cacheReadTokens === undefined ? {} :
+      { cachedInputTokens: usage.inputTokenDetails.cacheReadTokens }),
+    ...(usage.inputTokenDetails?.cacheWriteTokens === undefined ? {} :
+      { cacheWriteInputTokens: usage.inputTokenDetails.cacheWriteTokens }),
+    ...(usage.outputTokenDetails?.reasoningTokens === undefined ? {} :
+      { reasoningTokens: usage.outputTokenDetails.reasoningTokens }),
+  });
 }
 
 /**
@@ -156,6 +177,8 @@ export class AiSdkTranslationProvider extends StructuredTranslationProvider {
     const { model, providerOptions, ...engineOptions } = options;
     super({
       ...engineOptions,
+      // Preserve the SDK's historical three attempts, now owned by the engine.
+      maxRetries: engineOptions.maxRetries ?? 3,
       model: modelIdOf(model),
       transport: createAiSdkTransport({
         model,
@@ -180,6 +203,8 @@ export class AiSdkSemanticAuditProvider extends StructuredSemanticAuditProvider 
     const { model, providerOptions, ...engineOptions } = options;
     super({
       ...engineOptions,
+      // Preserve the SDK's historical three attempts, now owned by the engine.
+      maxRetries: engineOptions.maxRetries ?? 3,
       transport: createAiSdkTransport({
         model,
         ...(providerOptions === undefined ? {} : { providerOptions }),

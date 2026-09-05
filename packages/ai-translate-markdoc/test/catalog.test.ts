@@ -9,6 +9,7 @@ import type {
   ReconcileHistoryEntry,
   SyncStateSnapshot,
   SyncStateStore,
+  TranslationRequest,
 } from "@ai-translate/core/types";
 import { describe, expect, it } from "vitest";
 
@@ -35,6 +36,63 @@ function createMemoryStateStore(): SyncStateStore & { snapshot: SyncStateSnapsho
 }
 
 describe("createMarkdocCatalog", () => {
+  it("translates soft-wrapped paragraphs, list items, and quotes as complete units", async () => {
+    const rootDir = await createFixtureWorkspace();
+    const raw =
+      "# Guide\n\nA paragraph with **important\nwords** and a complete\nsentence.\n\n- A list item that\n  continues here.\n\n> A quotation that\n> continues here.\n\n```js\nconst untouched = 1;\n```\n";
+    await fs.writeFile(path.join(rootDir, "en/guide.md"), raw);
+    const catalog = createMarkdocCatalog({ rootDir, sourceLocale: "en" });
+    const state = createMemoryStateStore();
+    const observed: string[] = [];
+    const config = {
+      sourceLocale: "en",
+      targetLocales: ["de"],
+      catalogs: [catalog],
+      state,
+      provider: {
+        async translate({ requests }: { requests: readonly TranslationRequest[] }) {
+          observed.push(...requests.map(({ sourceText }) => sourceText));
+          return requests.map(({ key, sourceText }) => ({ key, translation: `DE ${sourceText}` }));
+        },
+      },
+    };
+    const result = await syncCatalogs(config);
+    expect(result.metrics.failedEntries).toBe(0);
+    expect(observed).toEqual([
+      "Guide",
+      "A paragraph with **important words** and a complete sentence.",
+      "A list item that continues here.",
+      "A quotation that continues here.",
+    ]);
+    const written = await fs.readFile(path.join(rootDir, "de/guide.md"), "utf8");
+    expect(written).toContain("```js\nconst untouched = 1;\n```");
+    expect(written).toContain("- DE A list item that continues here.");
+    expect(written).toContain("> DE A quotation that continues here.");
+    const next = await syncCatalogs(config);
+    expect(next.metrics.translatedEntries).toBe(0);
+    expect(next.metrics.failedEntries).toBe(0);
+    expect(observed).toHaveLength(4);
+    expect(await fs.readFile(path.join(rootDir, "en/guide.md"), "utf8")).toBe(raw);
+  });
+
+  it("preserves intentional hard breaks instead of merging their lines", async () => {
+    const rootDir = await createFixtureWorkspace();
+    await fs.writeFile(
+      path.join(rootDir, "en/guide.md"),
+      "First line  \nSecond line\n\nAnother paragraph.\n",
+    );
+    const catalog = createMarkdocCatalog({ rootDir, sourceLocale: "en" });
+    const [ref] = await catalog.listDocumentRefs("en");
+    if (!ref) {
+      throw new Error("Missing fixture.");
+    }
+    const source = await catalog.loadDocument(ref);
+    expect(source?.entries.map(({ value }) => value)).toEqual([
+      "First line",
+      "Second line",
+      "Another paragraph.",
+    ]);
+  });
   it("extracts frontmatter and body lines", async () => {
     const catalog = createMarkdocCatalog({
       rootDir: new URL("./fixtures/docs", import.meta.url).pathname,
@@ -109,9 +167,7 @@ describe("createMarkdocCatalog", () => {
     const bulletEntry = reconciled.entries.find(
       (entry) => entry.value === "Track expenses in real time.",
     );
-    const tableHeaderEntry = reconciled.entries.find(
-      (entry) => entry.value === "What Acme solves",
-    );
+    const tableHeaderEntry = reconciled.entries.find((entry) => entry.value === "What Acme solves");
     const tableValueEntry = reconciled.entries.find((entry) => entry.value === "Better visibility");
     expect(titleEntry).toBeDefined();
     expect(bulletEntry).toBeDefined();
@@ -509,9 +565,7 @@ describe("createMarkdocCatalog", () => {
     expect(result.metrics.translatedEntries).toBe(1);
     const written = await fs.readFile(path.join(rootDir, "nl", "guide.mdoc"), "utf8");
     expect(written).toContain("Actuele tekst met [**doellabel**](/guide).");
-    expect(written).toContain(
-      "Deze bestaande vertaling blijft staan.",
-    );
+    expect(written).toContain("Deze bestaande vertaling blijft staan.");
   });
 
   it("preserves bold, italic, and inline-code structure inside Markdown tables", async () => {
@@ -622,7 +676,9 @@ describe("createMarkdocCatalog", () => {
       // A leading non-breaking space is absorbed into the list marker's
       // trailing whitespace, so the binding prefix no longer matches.
       listEntry.value = "\u00a0Pidä kuitit järjestyksessä.";
-      await expect(catalog.writeDocument(reconciled)).rejects.toThrow(/Affected entries: \/@node:/u);
+      await expect(catalog.writeDocument(reconciled)).rejects.toThrow(
+        /Affected entries: \/@node:/u,
+      );
     } finally {
       await fs.rm(rootDir, { force: true, recursive: true });
     }

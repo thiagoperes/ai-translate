@@ -1,5 +1,13 @@
 # @ai-translate/fs-json
 
+## 0.2.1
+
+### Patch Changes
+
+- Include inline markup mode in candidate-cache identity and compatibility checks, preventing reuse across incompatible output contracts while retaining existing keys for ordinary text.
+- Updated dependencies
+  - @ai-translate/core@0.3.0
+
 ## 0.2.0
 
 ### Minor Changes

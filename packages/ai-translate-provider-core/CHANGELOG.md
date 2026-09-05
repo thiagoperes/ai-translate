@@ -1,5 +1,16 @@
 # @ai-translate/provider-core
 
+## 0.3.0
+
+### Minor Changes
+
+- Deduplicate equivalent translation requests across batches and concurrent calls, and reuse successful results for the duration of a sync. Adaptive batching now sizes short-text batches to the available concurrency and input/output budgets, while keeping protected and long-form content isolated. Translate complete inline markup units with structural and numeric validation, preserve heading reasoning, and report actual transport attempts and billed usage. Retry handling recognizes AI SDK failures without multiplying SDK and engine retries.
+
+### Patch Changes
+
+- Updated dependencies
+  - @ai-translate/core@0.3.0
+
 ## 0.2.0
 
 ### Minor Changes

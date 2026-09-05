@@ -9,5 +9,6 @@ export * from "./policies";
 export * from "./reconcile";
 export * from "./segment-delta";
 export * from "./sync";
+export * from "./telemetry";
 export * from "./tokens";
 export * from "./types";

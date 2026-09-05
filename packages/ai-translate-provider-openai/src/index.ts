@@ -91,6 +91,21 @@ export function createOpenAiTransport(
           timeout: requestTimeoutMs,
         },
       );
+      if (completion.usage !== undefined) {
+        request.onUsage?.({
+          inputTokens: completion.usage.prompt_tokens,
+          outputTokens: completion.usage.completion_tokens,
+          ...(completion.usage.prompt_tokens_details?.cached_tokens === undefined
+            ? {}
+            : { cachedInputTokens: completion.usage.prompt_tokens_details.cached_tokens }),
+          ...(completion.usage.completion_tokens_details?.reasoning_tokens === undefined
+            ? {}
+            : { reasoningTokens: completion.usage.completion_tokens_details.reasoning_tokens }),
+          ...(completion.usage.prompt_tokens_details?.cache_write_tokens === undefined
+            ? {}
+            : { cacheWriteInputTokens: completion.usage.prompt_tokens_details.cache_write_tokens }),
+        });
+      }
       return completion.choices[0]?.message.parsed;
     },
     label: "OpenAI",

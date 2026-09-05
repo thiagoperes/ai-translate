@@ -1,5 +1,17 @@
 # @ai-translate/provider-openai
 
+## 0.2.0
+
+### Minor Changes
+
+- Report billed input, output, cached, cache-write, and reasoning tokens through the shared request telemetry. Adopt adaptive batching, request deduplication, and complete inline markup translation from the updated provider engine.
+
+### Patch Changes
+
+- Updated dependencies
+  - @ai-translate/core@0.3.0
+  - @ai-translate/provider-core@0.3.0
+
 ## 0.1.1
 
 ### Patch Changes

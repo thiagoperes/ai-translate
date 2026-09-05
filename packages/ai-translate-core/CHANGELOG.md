@@ -1,5 +1,11 @@
 # @ai-translate/core
 
+## 0.3.0
+
+### Minor Changes
+
+- Prepare source and target documents concurrently, infer content roles from catalog metadata, and reuse equivalent provider results within a sync. Report physical API attempts, retries, latency percentiles, and token usage separately from logical provider invocations through the new telemetry export. Custom providers that do not report request metrics leave physical request counts unknown.
+
 ## 0.2.0
 
 ### Minor Changes

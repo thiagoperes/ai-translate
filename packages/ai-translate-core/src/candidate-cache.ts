@@ -25,6 +25,7 @@ type GenerationKeyMaterial = Omit<TranslationCandidateCacheKey, "digest">;
 
 function keyMaterial(key: GenerationKeyMaterial) {
   return {
+    ...(key.inlineMarkup ? { inlineMarkup: true } : {}),
     catalogId: key.catalogId,
     ...(key.contentRole === undefined ? {} : { contentRole: key.contentRole }),
     contentRoleRevision: key.contentRoleRevision,
@@ -74,9 +75,8 @@ function buildGenerationMaterial(args: {
   );
   return {
     catalogId: args.request.catalogId,
-    ...(args.request.contentRole === undefined
-      ? {}
-      : { contentRole: args.request.contentRole }),
+    ...(args.request.inlineMarkup ? { inlineMarkup: true } : {}),
+    ...(args.request.contentRole === undefined ? {} : { contentRole: args.request.contentRole }),
     contentRoleRevision: args.contentRoleRevision ?? "",
     generationRevision: args.generationRevision,
     glossaryDigest: digestValue(JSON.stringify(relevantGlossary)),
@@ -161,6 +161,7 @@ export function generationCacheKeyMaterialMatches(
   right: GenerationKeyMaterial,
 ): boolean {
   return (
+    Boolean(left.inlineMarkup) === Boolean(right.inlineMarkup) &&
     left.catalogId === right.catalogId &&
     left.contentRole === right.contentRole &&
     left.contentRoleRevision === right.contentRoleRevision &&

@@ -16,7 +16,7 @@ import {
 import { createTranslationCandidateCacheKey } from "./candidate-cache";
 import { digestValue } from "./hash";
 import { mapEntriesByPointer } from "./json";
-import { resolvePolicy, resolveTranslationContext } from "./policies";
+import { resolveContentRole, resolvePolicy, resolveTranslationContext } from "./policies";
 import { LEGACY_UNVERIFIED_GENERATION_REVISION } from "./types";
 import type {
   AiTranslateConfig,
@@ -986,7 +986,8 @@ async function collectCandidates(
             stateRecord.entry.generationRevision ===
               LEGACY_UNVERIFIED_GENERATION_REVISION;
 
-          const contentRole = config.contentRole?.({
+          const contentRole = resolveContentRole({
+            resolver: config.contentRole,
             catalogId: catalog.id,
             entry: sourceEntry,
             locale,

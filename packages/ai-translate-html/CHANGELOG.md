@@ -1,5 +1,16 @@
 # @ai-translate/html
 
+## 0.2.0
+
+### Minor Changes
+
+- Translate complete inline semantic blocks with automatic content roles instead of splitting surrounding prose at every inline element. Preserve original markup, attributes, code, and numeric values when restoring translated content. Extraction keys and block boundaries change for inline-rich documents, so existing fragments may require translation as complete units on the next sync.
+
+### Patch Changes
+
+- Updated dependencies
+  - @ai-translate/core@0.3.0
+
 ## 0.1.1
 
 ### Patch Changes

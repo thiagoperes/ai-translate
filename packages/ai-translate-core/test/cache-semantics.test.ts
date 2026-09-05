@@ -237,19 +237,19 @@ describe("cache semantics", () => {
     const first = await syncCatalogs(config);
     expect(first.metrics.failedEntries).toBe(0);
     expect(translate).toHaveBeenCalledTimes(1);
-    expect(first.metrics.providerRequestCount).toBe(1);
+    expect(first.metrics.providerInvocationCount).toBe(1);
     expect(first.metrics.candidateCacheWrites).toBeGreaterThan(0);
 
     translate.mockClear();
     const second = await syncCatalogs(config);
     expect(second.metrics.failedEntries).toBe(0);
     expect(translate).not.toHaveBeenCalled();
-    expect(second.metrics.providerRequestCount).toBe(0);
+    expect(second.metrics.providerInvocationCount).toBe(0);
 
     // Forced path must reuse attested cache with host revalidation.
     const forced = await syncCatalogs(config, { forceRetranslate: true });
     expect(translate).not.toHaveBeenCalled();
-    expect(forced.metrics.providerRequestCount).toBe(0);
+    expect(forced.metrics.providerInvocationCount).toBe(0);
     expect(forced.metrics.candidateCacheHits).toBeGreaterThan(0);
   });
 
@@ -304,7 +304,7 @@ describe("cache semantics", () => {
         { forceRetranslate: true }
       );
       expect(translate).not.toHaveBeenCalled();
-      expect(result.metrics.providerRequestCount).toBe(0);
+      expect(result.metrics.providerInvocationCount).toBe(0);
       expect(result.metrics.candidateCacheHits).toBeGreaterThan(0);
     }
   });
@@ -366,7 +366,7 @@ describe("cache semantics", () => {
       { forceRetranslate: true }
     );
     expect(translate).not.toHaveBeenCalled();
-    expect(rebound.metrics.providerRequestCount).toBe(0);
+    expect(rebound.metrics.providerInvocationCount).toBe(0);
     expect(rebound.metrics.candidateCacheHits).toBeGreaterThan(0);
   });
 
@@ -577,7 +577,7 @@ describe("cache semantics", () => {
     );
     expect(requested).toHaveLength(1);
     expect(requested[0]?.unitId).toBe("with-term");
-    expect(result.metrics.providerRequestCount).toBe(1);
+    expect(result.metrics.providerInvocationCount).toBe(1);
   });
 
   it("failed cache revalidation invalidates only the failed entry", async () => {

@@ -1,5 +1,16 @@
 # @ai-translate/markdoc
 
+## 0.3.0
+
+### Minor Changes
+
+- Join soft-wrapped prose into complete translation units and infer content roles from the document structure. Preserve explicit hard breaks, code fences, custom tags, and stable reloads. Previously fragmented soft-wrapped content may require translation as a complete unit on the next sync.
+
+### Patch Changes
+
+- Updated dependencies
+  - @ai-translate/core@0.3.0
+
 ## 0.2.0
 
 ### Minor Changes

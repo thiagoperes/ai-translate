@@ -30,6 +30,52 @@ function createMockClient(parsed: unknown = { answer: "ja" }): {
 const schema = z.object({ answer: z.string() });
 
 describe("createOpenAiTransport", () => {
+  it.each([true, false])("accepts usage without optional token details (reporter: %s)", async (report) => {
+    const usage = vi.fn();
+    const parse = vi.fn(async () => ({
+      choices: [{ message: { parsed: { answer: "ja" } } }],
+      usage: { prompt_tokens: 120, completion_tokens: 0 },
+    }));
+    const client = { chat: { completions: { parse } } } as unknown as OpenAI;
+
+    await expect(createOpenAiTransport({ client }).complete({
+      messages: [{ content: "x", role: "user" }],
+      modelId: "test",
+      schema,
+      schemaName: "answer",
+      ...(report ? { onUsage: usage } : {}),
+    })).resolves.toEqual({ answer: "ja" });
+    expect(usage.mock.calls).toEqual(report ? [[{ inputTokens: 120, outputTokens: 0 }]] : []);
+  });
+
+  it("reports billed input, output, cached, cache-write, and reasoning tokens", async () => {
+    const usage = vi.fn();
+    const parse = vi.fn(async () => ({
+      choices: [{ message: { parsed: { answer: "ja" } } }],
+      usage: {
+        prompt_tokens: 120,
+        completion_tokens: 30,
+        prompt_tokens_details: { cached_tokens: 40, cache_write_tokens: 20 },
+        completion_tokens_details: { reasoning_tokens: 10 },
+      },
+    }));
+    const client = { chat: { completions: { parse } } } as unknown as OpenAI;
+    await createOpenAiTransport({ client }).complete({
+      messages: [{ content: "x", role: "user" }],
+      modelId: "test",
+      schema,
+      schemaName: "answer",
+      onUsage: usage,
+    });
+    expect(usage).toHaveBeenCalledExactlyOnceWith({
+      inputTokens: 120,
+      outputTokens: 30,
+      cachedInputTokens: 40,
+      cacheWriteInputTokens: 20,
+      reasoningTokens: 10,
+    });
+  });
+
   it("requires an api key or a client", () => {
     expect(() => createOpenAiTransport()).toThrow(
       "OpenAI transport requires either apiKey or client.",
@@ -86,11 +132,7 @@ describe("createOpenAiTransport", () => {
     });
 
     const [body] = parse.mock.calls[0] as unknown as ParseArguments;
-    expect(Object.keys(body).toSorted()).toEqual([
-      "messages",
-      "model",
-      "response_format",
-    ]);
+    expect(Object.keys(body).toSorted()).toEqual(["messages", "model", "response_format"]);
   });
 
   it("disables SDK retries and applies the configured timeout and abort signal", async () => {
