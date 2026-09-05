@@ -53,7 +53,7 @@
   },
   "dependencies": {
     "@ai-translate/core": "workspace:*",
-    "@formatjs/icu-messageformat-parser": "3.5.16"
+    "@formatjs/icu-messageformat-parser": "3.5.17"
   },
   "engines": {
     "node": ">=20.19.0"
