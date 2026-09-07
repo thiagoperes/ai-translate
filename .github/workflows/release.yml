@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       # Without a credential, `changeset publish` still installs, builds, and
       # packs every package before dying in a per-package ENEEDAUTH dump that
       # buries the one fact that matters. Checking first turns a slow, unclear
@@ -52,7 +52,7 @@ jobs:
       - uses: pnpm/action-setup@v6
         with:
           version: 10.32.1
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml

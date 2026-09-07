@@ -31,11 +31,11 @@ jobs:
           - 20.19.0
           - 22.23.1
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
         with:
           version: 10.32.1
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
@@ -86,7 +86,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Ensure local main branch
@@ -113,7 +113,7 @@ jobs:
         with:
           version: 10.32.1
       - if: steps.kind.outputs.release != 'true'
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
@@ -128,5 +128,5 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: rhysd/actionlint@v1.7.12
