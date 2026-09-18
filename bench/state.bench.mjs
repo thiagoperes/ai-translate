@@ -116,7 +116,7 @@ async function main() {
       rootDir = path.resolve(shardsDir, "..", "..");
       const probe = await createShardedJsonStateStore({ rootDir }).load();
       locales = [...new Set(Object.values(probe.entries).map((entry) => entry.locale))].toSorted(
-        (left, right) => left.localeCompare(right),
+        (left, right) => (left < right ? -1 : left > right ? 1 : 0),
       );
     }
 

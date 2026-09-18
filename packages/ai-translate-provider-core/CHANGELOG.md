@@ -1,5 +1,12 @@
 # @ai-translate/provider-core
 
+## 0.3.2
+
+### Patch Changes
+
+- Updated dependencies [`55cfebc`]:
+  - @ai-translate/core@0.3.2
+
 ## 0.3.1
 
 ### Patch Changes

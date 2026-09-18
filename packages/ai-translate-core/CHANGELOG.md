@@ -1,5 +1,11 @@
 # @ai-translate/core
 
+## 0.3.2
+
+### Patch Changes
+
+- Reject array addresses outside the ECMAScript index range so values cannot be silently lost when saving JSON.
+
 ## 0.3.1
 
 ### Patch Changes

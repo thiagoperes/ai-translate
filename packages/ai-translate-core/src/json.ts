@@ -31,7 +31,12 @@ export function getJsonValueAtAddress(
     }
 
     if (segment.kind === "index") {
-      if (!Array.isArray(current) || !Number.isSafeInteger(segment.index) || segment.index < 0) {
+      if (
+        !Array.isArray(current) ||
+        !Number.isSafeInteger(segment.index) ||
+        segment.index < 0 ||
+        segment.index >= 2 ** 32 - 1
+      ) {
         return undefined;
       }
 
@@ -71,7 +76,12 @@ export function setJsonValueAtAddress(
     }
 
     if (segment.kind === "index") {
-      if (!Array.isArray(current) || !Number.isSafeInteger(segment.index) || segment.index < 0) {
+      if (
+        !Array.isArray(current) ||
+        !Number.isSafeInteger(segment.index) ||
+        segment.index < 0 ||
+        segment.index >= 2 ** 32 - 1
+      ) {
         throw new Error("Expected an array while traversing a JSON address.");
       }
 
@@ -119,7 +129,12 @@ export function setJsonValueAtAddress(
   }
 
   if (last.kind === "index") {
-    if (!Array.isArray(current) || !Number.isSafeInteger(last.index) || last.index < 0) {
+    if (
+      !Array.isArray(current) ||
+      !Number.isSafeInteger(last.index) ||
+      last.index < 0 ||
+      last.index >= 2 ** 32 - 1
+    ) {
       throw new Error("Expected an array at the final JSON address segment.");
     }
 
