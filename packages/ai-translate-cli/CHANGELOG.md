@@ -1,5 +1,13 @@
 # @ai-translate/cli
 
+## 0.2.2
+
+### Patch Changes
+
+- Updated dependencies [`efa1ec6`]:
+  - @ai-translate/core@0.3.1
+  - @ai-translate/fs-json@0.2.2
+
 ## 0.2.1
 
 ### Patch Changes

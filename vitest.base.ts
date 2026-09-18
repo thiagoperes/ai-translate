@@ -66,7 +66,6 @@ export function createPackageVitestConfig(
   options: PackageVitestConfigOptions = {},
 ): ViteUserConfigExport {
   const packageDir = toDirectoryPath(packageUrl);
-  const srcGlob = path.join(packageDir, "src/**/*.ts");
   const testGlob = path.join(packageDir, "test/**/*.test.ts");
   const coverageThresholds = options.coverageThresholds ?? {
     branches: 70,
@@ -76,13 +75,14 @@ export function createPackageVitestConfig(
   };
 
   return defineConfig({
+    root: packageDir,
     resolve: {
       alias: workspaceAliases,
     },
     test: {
       coverage: {
-        exclude: (options.coverageExclude ?? []).map((pattern) => path.join(packageDir, pattern)),
-        include: [srcGlob],
+        exclude: options.coverageExclude ?? [],
+        include: ["src/**/*.ts"],
         provider: "v8",
         reporter: ["text", "lcov"],
         reportsDirectory: path.join(packageDir, "coverage"),

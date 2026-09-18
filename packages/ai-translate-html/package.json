@@ -1,6 +1,6 @@
 {
   "name": "@ai-translate/html",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "HTML catalog adapter for ai-translate, translating text nodes and attributes while preserving markup.",
   "keywords": [
     "i18n",
@@ -50,8 +50,8 @@
   },
   "dependencies": {
     "@ai-translate/core": "workspace:*",
-    "globby": "16.2.2",
-    "node-html-parser": "9.0.0"
+    "globby": "16.2.4",
+    "node-html-parser": "9.0.4"
   },
   "engines": {
     "node": ">=20.19.0"

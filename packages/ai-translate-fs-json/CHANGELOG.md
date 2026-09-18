@@ -1,5 +1,14 @@
 # @ai-translate/fs-json
 
+## 0.2.2
+
+### Patch Changes
+
+- Prevent prototype pollution through JSON addresses, bound token parsing work on malformed Markdown, and reject executable JavaScript frontmatter. Update runtime dependencies and resolve vulnerable YAML dependencies.
+
+- Updated dependencies [`efa1ec6`]:
+  - @ai-translate/core@0.3.1
+
 ## 0.2.1
 
 ### Patch Changes

@@ -240,7 +240,7 @@ pnpm test
 pnpm lint
 ```
 
-The workspace development toolchain uses Node 24.15.0 (see [`.node-version`](.node-version)); published packages declare their own runtime requirements.
+The workspace development toolchain uses Node 24.20.0 (see [`.node-version`](.node-version)); published packages declare their own runtime requirements.
 
 Releases use [changesets](https://github.com/changesets/changesets). Add one
 with `pnpm exec changeset`, then version the release branch:

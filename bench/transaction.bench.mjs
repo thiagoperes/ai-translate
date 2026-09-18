@@ -86,7 +86,7 @@ async function measureTransaction(rootDir, scope) {
   const store = createShardedJsonStateStore({ rootDir });
   const before = settle();
 
-  const { peak, value } = await withPeakRss(async () =>
+  const { peak, value } = await withPeakRss(() =>
     store.withLock(async () => {
       const initialState = await store.load(scope);
       // Staging keeps an untouched copy to roll back to, and hands a second one

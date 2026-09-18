@@ -154,8 +154,20 @@ function collectMarkdocParseErrors(node: unknown, errors: MarkdocParseError[]): 
   }
 }
 
+function parseFrontmatter(raw: string): matter.GrayMatterFile<string> {
+  return matter(raw, {
+    engines: {
+      // gray-matter evaluates JavaScript frontmatter by default, including its
+      // js alias. Content being translated must never execute as application code.
+      javascript: () => {
+        throw new Error("JavaScript frontmatter is not supported.");
+      },
+    },
+  });
+}
+
 function validateMarkdocSyntax(raw: string): void {
-  const parsed = matter(raw);
+  const parsed = parseFrontmatter(raw);
   const ast = parseMarkdoc(parsed.content);
   const errors: MarkdocParseError[] = [];
   collectMarkdocParseErrors(ast, errors);
@@ -687,7 +699,7 @@ function loadMarkdocState(
   raw: string,
 ): LoadedDocument<MarkdocDocumentState> {
   validateMarkdocSyntax(raw);
-  const parsed = matter(raw);
+  const parsed = parseFrontmatter(raw);
 
   const { bindings, entries: bodyEntries, lines } = createBodyEntries(parsed.content);
   const frontmatter: FrontmatterRoot = parsed.data;

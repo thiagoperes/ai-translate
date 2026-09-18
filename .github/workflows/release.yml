@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Without a credential, `changeset publish` still installs, builds, and
       # packs every package before dying in a per-package ENEEDAUTH dump that
       # buries the one fact that matters. Checking first turns a slow, unclear
@@ -49,17 +49,16 @@ jobs:
             echo "  gh secret set NPM_TOKEN --repo ${{ github.repository }}"
             exit 1
           fi
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           version: 10.32.1
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-          # Signed provenance needs a recent npm. Node 24.15.0 ships npm 11.12.1
+          # Signed provenance needs a recent npm. Node 24.20.0 includes npm 11
           # and is part of this repository's supported engines.
-          node-version: 24.15.0
-          registry-url: "https://registry.npmjs.org"
+          node-version: 24.20.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r --filter './packages/*' build
       - run: pnpm -r --filter './packages/*' test:pack
@@ -81,6 +80,14 @@ jobs:
             console.log("Skipping publish. Still at 0.0.0: " + placeholder.join(", ") + ". Run pnpm release:version first.");
           }
           '
+      # setup-node v7 no longer supplies a placeholder NODE_AUTH_TOKEN. Create
+      # the authenticated npm config only after install/build/package checks,
+      # immediately before the step that receives the actual publishing token.
+      - if: steps.guard.outputs.publish == 'true'
+        name: Configure npm publishing
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          registry-url: "https://registry.npmjs.org"
       # The token authenticates; `id-token: write` plus NPM_CONFIG_PROVENANCE is
       # what attaches a signed provenance attestation to each published version.
       # They are separate mechanisms, and both are wanted here.

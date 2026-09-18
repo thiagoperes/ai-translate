@@ -1,6 +1,6 @@
 {
   "name": "@ai-translate/provider-openai",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "OpenAI translation and semantic-audit providers for ai-translate, with structured output and batching.",
   "keywords": [
     "i18n",
@@ -53,8 +53,8 @@
   "dependencies": {
     "@ai-translate/core": "workspace:*",
     "@ai-translate/provider-core": "workspace:*",
-    "openai": "7.1.0",
-    "zod": "4.4.3"
+    "openai": "7.18.0",
+    "zod": "4.6.5"
   },
   "engines": {
     "node": ">=22.0.0"

@@ -9,9 +9,52 @@ import {
   setJsonValueAtAddress,
   visitJsonLeaves,
 } from "../src/json";
-import type { Entry, JsonValue, LoadedDocument } from "../src/types";
+import type { AddressSegment, Entry, JsonValue, LoadedDocument } from "../src/types";
 
 describe("json helpers", () => {
+  it("treats prototype-named JSON keys as own data without polluting prototypes", () => {
+    const root: JsonValue = {};
+    const pointer = [
+      { key: "__proto__", kind: "key" },
+      { key: "aiTranslatePolluted", kind: "key" },
+    ] as const;
+    try {
+      expect(getJsonValueAtAddress(root, [{ key: "__proto__", kind: "key" }])).toBeUndefined();
+      expect(getJsonValueAtAddress(root, [{ key: "constructor", kind: "key" }])).toBeUndefined();
+      setJsonValueAtAddress(root, pointer, "translated");
+      expect(Object.hasOwn(Object.prototype, "aiTranslatePolluted")).toBe(false);
+      expect(Object.getPrototypeOf(root)).toBe(Object.prototype);
+      expect(getJsonValueAtAddress(root, pointer)).toBe("translated");
+      expect(JSON.stringify(root)).toBe('{"__proto__":{"aiTranslatePolluted":"translated"}}');
+
+      setJsonValueAtAddress(root, [{ key: "__proto__", kind: "key" }], "ordinary text");
+      expect(Object.getPrototypeOf(root)).toBe(Object.prototype);
+      expect(getJsonValueAtAddress(root, [{ key: "__proto__", kind: "key" }])).toBe("ordinary text");
+      setJsonValueAtAddress(root, [
+        { key: "constructor", kind: "key" },
+        { key: "prototype", kind: "key" },
+        { key: "aiTranslatePolluted", kind: "key" },
+      ], "safe");
+      expect(Object.hasOwn(Object.prototype, "aiTranslatePolluted")).toBe(false);
+    } finally {
+      Reflect.deleteProperty(Object.prototype, "aiTranslatePolluted");
+    }
+  });
+
+  it.each(["__proto__", "constructor", -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects an invalid runtime array index %s",
+    (index) => {
+      const segment = { index, kind: "index" } as AddressSegment;
+      const root: JsonValue[] = [];
+      expect(getJsonValueAtAddress(root, [segment])).toBeUndefined();
+      expect(() => { setJsonValueAtAddress(root, [segment], "bad"); }).toThrow();
+      expect(() => {
+        setJsonValueAtAddress(root, [segment, { key: "value", kind: "key" }], "bad");
+      }).toThrow();
+      expect(Object.getPrototypeOf(root)).toBe(Array.prototype);
+    },
+  );
+
   it("clones JSON values and identifies plain objects", () => {
     const source = {
       meta: {

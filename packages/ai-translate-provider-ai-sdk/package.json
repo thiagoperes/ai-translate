@@ -1,6 +1,6 @@
 {
   "name": "@ai-translate/provider-ai-sdk",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Run ai-translate against any AI SDK provider — OpenAI, Anthropic, Google, Bedrock, or a gateway — with one interchangeable translation and semantic-audit provider.",
   "keywords": [
     "i18n",
@@ -56,13 +56,13 @@
   "dependencies": {
     "@ai-translate/core": "workspace:*",
     "@ai-translate/provider-core": "workspace:*",
-    "zod": "4.4.3"
+    "zod": "4.6.5"
   },
   "peerDependencies": {
     "ai": "^6.0.0 || ^7.0.0"
   },
   "devDependencies": {
-    "ai": "7.0.48"
+    "ai": "7.0.106"
   },
   "engines": {
     "node": ">=22.0.0"

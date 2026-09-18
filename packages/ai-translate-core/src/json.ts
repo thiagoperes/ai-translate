@@ -31,7 +31,7 @@ export function getJsonValueAtAddress(
     }
 
     if (segment.kind === "index") {
-      if (!Array.isArray(current)) {
+      if (!Array.isArray(current) || !Number.isSafeInteger(segment.index) || segment.index < 0) {
         return undefined;
       }
 
@@ -43,7 +43,7 @@ export function getJsonValueAtAddress(
       return undefined;
     }
 
-    current = current[segment.key];
+    current = Object.hasOwn(current, segment.key) ? current[segment.key] : undefined;
   }
 
   return current;
@@ -71,7 +71,7 @@ export function setJsonValueAtAddress(
     }
 
     if (segment.kind === "index") {
-      if (!Array.isArray(current)) {
+      if (!Array.isArray(current) || !Number.isSafeInteger(segment.index) || segment.index < 0) {
         throw new Error("Expected an array while traversing a JSON address.");
       }
 
@@ -94,26 +94,23 @@ export function setJsonValueAtAddress(
       continue;
     }
 
-    if (Array.isArray(current)) {
+    if (!isJsonObject(current)) {
       throw new Error("Expected an object while traversing a JSON address.");
     }
 
-    const existingValue = current[segment.key];
-    if (existingValue === undefined) {
-      current[segment.key] =
-        next?.kind === "index" ? [] : {};
+    // JSON keys are data, including __proto__ and constructor. Never traverse
+    // inherited properties or invoke the legacy __proto__ setter.
+    let nextValue = Object.hasOwn(current, segment.key) ? current[segment.key] : undefined;
+    if (typeof nextValue !== "object" || nextValue === null) {
+      nextValue = next?.kind === "index" ? [] : {};
+      Object.defineProperty(current, segment.key, {
+        configurable: true,
+        enumerable: true,
+        value: nextValue,
+        writable: true,
+      });
     }
-
-    const nextValue = current[segment.key];
-    if (
-      nextValue === undefined ||
-      (typeof nextValue !== "object" || nextValue === null)
-    ) {
-      current[segment.key] =
-        next?.kind === "index" ? [] : {};
-    }
-
-    current = current[segment.key] as MutableContainer;
+    current = nextValue;
   }
 
   const last = address[address.length - 1];
@@ -122,7 +119,7 @@ export function setJsonValueAtAddress(
   }
 
   if (last.kind === "index") {
-    if (!Array.isArray(current)) {
+    if (!Array.isArray(current) || !Number.isSafeInteger(last.index) || last.index < 0) {
       throw new Error("Expected an array at the final JSON address segment.");
     }
 
@@ -130,11 +127,16 @@ export function setJsonValueAtAddress(
     return;
   }
 
-  if (Array.isArray(current)) {
+  if (!isJsonObject(current)) {
     throw new Error("Expected an object at the final JSON address segment.");
   }
 
-  current[last.key] = value;
+  Object.defineProperty(current, last.key, {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  });
 }
 
 export function visitJsonLeaves(

@@ -2,7 +2,7 @@ import { defineConfig } from "tsdown";
 
 export default defineConfig({
   clean: true,
-  dts: { oxc: true, sourcemap: true, tsconfig: false },
+  dts: { generator: "oxc", sourcemap: true, tsconfig: false },
   entry: [
     "src/index.ts",
     "src/address.ts",

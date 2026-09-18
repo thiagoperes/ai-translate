@@ -9,8 +9,123 @@ import type {
   TranslationValidationIssue,
 } from "./types";
 
+// Tag attributes cannot cross angle brackets. A single whitespace prefix
+// avoids overlapping repetitions on unterminated tags such as "<9\t\t...".
 const TOKEN_PATTERN =
-  /\]\((?:<[^>\n]+>|[^)\s]+)(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\)|<\/?(?:[A-Za-z][\w:-]*|\d+)(?:\s+[^<>]*?)?\s*\/?>|\{\{[^{}]+\}\}|\{[^{}]+\}/gu;
+  /<\/?(?:[A-Za-z][\w:-]*|\d+)(?:\s[^<>]*)?\/?>|\{\{[^{}]+\}\}|\{[^{}]+\}/gu;
+
+interface RawMatch {
+  index: number;
+  raw: string;
+}
+
+function nextBoundary(boundaries: readonly number[], start: number): number | undefined {
+  let low = 0;
+  let high = boundaries.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if ((boundaries[middle] as number) < start) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  return boundaries[low];
+}
+
+function findMarkdownDestinations(value: string): { index: number; end: number }[] {
+  let index = value.indexOf("](");
+  if (index === -1) {
+    return [];
+  }
+
+  // Index terminators once. Repeated unterminated ](< or ](! prefixes used to
+  // make the regex rescan the remaining string at every possible opener.
+  const angles: number[] = [];
+  const bare: number[] = [];
+  const doubleQuotes: number[] = [];
+  const singleQuotes: number[] = [];
+  for (let cursor = 0; cursor < value.length; cursor += 1) {
+    const character = value[cursor];
+    if (character === ">" || character === "\n") {
+      angles.push(cursor);
+    }
+    if (character === ")" || isWhitespace(character)) {
+      bare.push(cursor);
+    }
+    if (character === '"' || character === "\n") {
+      doubleQuotes.push(cursor);
+    }
+    if (character === "'" || character === "\n") {
+      singleQuotes.push(cursor);
+    }
+  }
+
+  const suffixes = new Map<number, number | undefined>();
+  const suffixEnd = (start: number): number | undefined => {
+    if (value[start] === ")") {
+      return start + 1;
+    }
+    if (suffixes.has(start)) {
+      return suffixes.get(start);
+    }
+    let cursor = start;
+    while (cursor < value.length && isWhitespace(value[cursor])) {
+      cursor += 1;
+    }
+    const quote = value[cursor];
+    let end: number | undefined;
+    if (cursor > start && (quote === '"' || quote === "'")) {
+      const close = nextBoundary(quote === '"' ? doubleQuotes : singleQuotes, cursor + 1);
+      if (close !== undefined && value[close] === quote && value[close + 1] === ")") {
+        end = close + 2;
+      }
+    }
+    suffixes.set(start, end);
+    return end;
+  };
+
+  const matches: { index: number; end: number }[] = [];
+  while (index !== -1) {
+    const start = index + 2;
+    let end: number | undefined;
+    if (value[start] === "<") {
+      const close = nextBoundary(angles, start + 1);
+      if (close !== undefined && close > start + 1 && value[close] === ">") {
+        end = suffixEnd(close + 1);
+      }
+    }
+    if (end === undefined) {
+      const close = nextBoundary(bare, start);
+      if (close !== undefined && close > start) {
+        end = suffixEnd(close);
+      }
+    }
+    if (end !== undefined) {matches.push({ index, end });}
+    index = value.indexOf("](", start);
+  }
+  return matches;
+}
+
+function findRawMatches(value: string): RawMatch[] {
+  const candidates = [
+    ...[...value.matchAll(TOKEN_PATTERN)].map((match) => ({
+      index: match.index,
+      end: match.index + match[0].length,
+    })),
+    ...findMarkdownDestinations(value),
+  ].toSorted((left, right) => left.index - right.index);
+  let end = 0;
+  return candidates
+    .filter((match) => {
+      if (match.index < end) {
+        return false;
+      }
+      end = match.end;
+      return true;
+    })
+    .map((match) => ({ index: match.index, raw: value.slice(match.index, match.end) }));
+}
 
 interface ProtectedMatch {
   index: number;
@@ -46,39 +161,36 @@ function isEscaped(value: string, index: number): boolean {
   return backslashes % 2 === 1;
 }
 
-function findMarkdownOpener(
-  value: string,
-  destinationIndex: number,
-): { index: number; token: MarkdownOpenerToken } | undefined {
-  let nestedBrackets = 0;
-  for (let cursor = destinationIndex - 1; cursor >= 0; cursor -= 1) {
-    const character = value[cursor];
-    if (isEscaped(value, cursor)) {
+function findMarkdownOpeners(value: string, matches: readonly RawMatch[]): ProtectedMatch[] {
+  const brackets: number[] = [];
+  const openers: ProtectedMatch[] = [];
+  let cursor = 0;
+  for (const match of matches) {
+    if (!match.raw.startsWith("](")) {
       continue;
     }
-    if (character === "]") {
-      nestedBrackets += 1;
-      continue;
+    // Walk the prefix only once, even for a long sequence of destinations
+    // without labels. Searching backwards independently was quadratic too.
+    for (; cursor < match.index; cursor += 1) {
+      const character = value[cursor];
+      if ((character === "[" || character === "]") && !isEscaped(value, cursor)) {
+        if (character === "[") {
+          brackets.push(cursor);
+        } else {
+          brackets.pop();
+        }
+      }
     }
-    if (character !== "[") {
-      continue;
+    const opener = brackets.at(-1);
+    if (opener !== undefined) {
+      const image = opener > 0 && value[opener - 1] === "!" && !isEscaped(value, opener - 1);
+      openers.push({
+        index: image ? opener - 1 : opener,
+        token: { raw: image ? "![" : "[", type: "markdown-opener" },
+      });
     }
-    if (nestedBrackets > 0) {
-      nestedBrackets -= 1;
-      continue;
-    }
-
-    const image = cursor > 0 && value[cursor - 1] === "!" && !isEscaped(value, cursor - 1);
-    return {
-      index: image ? cursor - 1 : cursor,
-      token: {
-        raw: image ? "![" : "[",
-        type: "markdown-opener",
-      },
-    };
   }
-
-  return undefined;
+  return openers;
 }
 
 function findInlineCodeMatches(value: string): ProtectedMatch[] {
@@ -242,19 +354,12 @@ function findFormattingMatches(
 export function tokenizeText(value: string): Token[] {
   const tokens: Token[] = [];
   let lastIndex = 0;
-  const matches = [...value.matchAll(TOKEN_PATTERN)];
-  const markdownOpeners = matches.flatMap((match) => {
-    const raw = match[0];
-    if (!raw.startsWith("](")) {
-      return [];
-    }
-    const opener = findMarkdownOpener(value, match.index);
-    return opener === undefined ? [] : [opener];
-  });
+  const matches = findRawMatches(value);
+  const markdownOpeners = findMarkdownOpeners(value, matches);
   const inlineCodeMatches = findInlineCodeMatches(value);
   const protectedMatches: ProtectedMatch[] = [
     ...matches.map((match): ProtectedMatch => {
-      const raw = match[0];
+      const { raw } = match;
       return {
         index: match.index,
         token: raw.startsWith("](")

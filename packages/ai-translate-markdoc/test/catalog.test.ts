@@ -36,6 +36,26 @@ function createMemoryStateStore(): SyncStateStore & { snapshot: SyncStateSnapsho
 }
 
 describe("createMarkdocCatalog", () => {
+  it.each(["js", "javascript", "JS", "JavaScript"])(
+    "rejects executable %s frontmatter before evaluating document content",
+    async (language) => {
+      const rootDir = await createFixtureWorkspace();
+      const marker = "__aiTranslateFrontmatterExecuted";
+      try {
+        await fs.writeFile(path.join(rootDir, "en/guide.md"),
+          `---${language}\n({title: (globalThis.${marker} = true, "bad")})\n---\n# Guide\n`);
+        const catalog = createMarkdocCatalog({ rootDir, sourceLocale: "en" });
+        const [ref] = await catalog.listDocumentRefs("en");
+        if (!ref) {throw new Error("Missing fixture.");}
+        await expect(catalog.loadDocument(ref)).rejects.toThrow("JavaScript frontmatter is not supported.");
+        expect(Object.hasOwn(globalThis, marker)).toBe(false);
+      } finally {
+        Reflect.deleteProperty(globalThis, marker);
+        await fs.rm(rootDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("translates soft-wrapped paragraphs, list items, and quotes as complete units", async () => {
     const rootDir = await createFixtureWorkspace();
     const raw =
