@@ -59,7 +59,6 @@ jobs:
           # Signed provenance needs a recent npm. Node 24.20.0 includes npm 11
           # and is part of this repository's supported engines.
           node-version: 24.20.0
-          registry-url: "https://registry.npmjs.org"
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r --filter './packages/*' build
       - run: pnpm -r --filter './packages/*' test:pack
@@ -81,6 +80,14 @@ jobs:
             console.log("Skipping publish. Still at 0.0.0: " + placeholder.join(", ") + ". Run pnpm release:version first.");
           }
           '
+      # setup-node v7 no longer supplies a placeholder NODE_AUTH_TOKEN. Create
+      # the authenticated npm config only after install/build/package checks,
+      # immediately before the step that receives the actual publishing token.
+      - if: steps.guard.outputs.publish == 'true'
+        name: Configure npm publishing
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          registry-url: "https://registry.npmjs.org"
       # The token authenticates; `id-token: write` plus NPM_CONFIG_PROVENANCE is
       # what attaches a signed provenance attestation to each published version.
       # They are separate mechanisms, and both are wanted here.
