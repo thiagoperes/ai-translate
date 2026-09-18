@@ -3,6 +3,54 @@ import { describe, expect, it } from "vitest";
 import { tokenizeText, validateTokenParity } from "../src/tokens";
 
 describe("tokenization", () => {
+  it.each([
+    ['](/guide "Title")', '](/guide "Title")'],
+    ["](/guide 'Title')", "](/guide 'Title')"],
+    ['](</a b>)', '](</a b>)'],
+    ['](</a)b> "Title")', '](</a)b> "Title")'],
+    ['](<guide)', '](<guide)'],
+    ['](<>)', '](<>)'],
+    ['](/guide\n"Title")', '](/guide\n"Title")'],
+    ['](</a b> nope)', undefined],
+    ['](/guide "unclosed)', undefined],
+    ['](/guide "line\nbreak")', undefined],
+    ['](/guide "Title" )', undefined],
+    ['](</a\nb>)', undefined],
+    [']( )', undefined],
+    [']()', undefined],
+    ['](/unterminated', undefined],
+  ])("preserves destination parsing for %s", (input, destination) => {
+    const tokens = tokenizeText(input);
+    expect(tokens.filter((token) => token.type === "markdown-destination").map(({ raw }) => raw))
+      .toEqual(destination === undefined ? [] : [destination]);
+    expect(tokens.map(({ raw }) => raw).join("")).toBe(input);
+  });
+
+  it("keeps placeholder and tag contents ahead of nested destination syntax", () => {
+    expect(tokenizeText('{link ](/guide)} <span data-link="](/guide)">'))
+      .toEqual([
+        { name: "link ](/guide)", raw: "{link ](/guide)}", syntax: "single-brace", type: "placeholder" },
+        { raw: " ", type: "text" },
+        { flavor: "html", name: "span", raw: '<span data-link="](/guide)">', tagKind: "open", type: "tag" },
+      ]);
+    expect(tokenizeText('<x attr="](/one">](/two)').map(({ raw }) => raw))
+      .toEqual(['<x attr="](/one">', '](/two)']);
+    expect(tokenizeText('<9 \t/> <a href="x"> </A> <0>'))
+      .toHaveLength(7);
+  });
+
+  it.each([
+    '](<'.repeat(20_000),
+    '](!'.repeat(20_000),
+    `<9${"\t".repeat(60_000)}`,
+    '](/x)'.repeat(20_000),
+  ])("bounds work for hostile token prefixes (%#)", (input) => {
+    const started = performance.now();
+    const tokens = tokenizeText(input);
+    expect(performance.now() - started).toBeLessThan(1500);
+    expect(tokens.map(({ raw }) => raw).join("")).toBe(input);
+  });
+
   it("returns a text token for strings without placeholders or tags", () => {
     expect(tokenizeText("Plain copy")).toEqual([
       {
