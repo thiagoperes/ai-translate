@@ -41,7 +41,7 @@ describe("json helpers", () => {
     }
   });
 
-  it.each(["__proto__", "constructor", -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+  it.each(["__proto__", "constructor", -1, 1.5, 2 ** 32 - 1, Number.NaN, Number.POSITIVE_INFINITY])(
     "rejects an invalid runtime array index %s",
     (index) => {
       const segment = { index, kind: "index" } as AddressSegment;
