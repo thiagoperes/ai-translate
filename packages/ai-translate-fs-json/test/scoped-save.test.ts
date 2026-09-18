@@ -125,25 +125,32 @@ describe("scoped state saving", () => {
     expect((store as unknown as Record<symbol, unknown>)[marker]).toBe(true);
   });
 
-  it("leaves every locale outside the scope untouched, for every locale subset", async () => {
-    for (let mask = 1; mask < 1 << LOCALES.length; mask += 1) {
+  // Each subset performs real durable writes. Give each case its own normal
+  // test deadline so disk contention cannot time out all 31 subsets together.
+  it.each(Array.from({ length: (1 << LOCALES.length) - 1 }, (_, index) => index + 1))(
+    "leaves every locale outside the scope untouched for locale subset %i",
+    async (mask) => {
       const locales = LOCALES.filter((_, index) => (mask & (1 << index)) !== 0);
       const corpus = buildCorpus({ pointers: 3, units: 3 });
       const rootDir = await seedStore(corpus);
-      const store = createShardedJsonStateStore({ rootDir });
-      const before = await store.load();
+      try {
+        const store = createShardedJsonStateStore({ rootDir });
+        const before = await store.load();
 
-      // Mutate every in-scope entry so a merge that silently kept the old
-      // records would be caught alongside one that dropped the new ones.
-      const scoped = projectLocales(before, locales);
-      for (const entry of Object.values(scoped.entries)) {
-        entry.targetDigest = `rewritten-${entry.locale}`;
+        // Mutate every in-scope entry so a merge that silently kept the old
+        // records would be caught alongside one that dropped the new ones.
+        const scoped = projectLocales(before, locales);
+        for (const entry of Object.values(scoped.entries)) {
+          entry.targetDigest = `rewritten-${entry.locale}`;
+        }
+
+        await store.save(scoped, { locales });
+        expect(await store.load()).toEqual(applyScopedSave(before, scoped, locales));
+      } finally {
+        await fs.rm(rootDir, { recursive: true, force: true });
       }
-
-      await store.save(scoped, { locales });
-      expect(await store.load()).toEqual(applyScopedSave(before, scoped, locales));
-    }
-  });
+    },
+  );
 
   it("deletes in-scope entries the snapshot drops while keeping the same unit's other locales", async () => {
     const rootDir = await seedStore(buildCorpus({ pointers: 3, units: 2 }));
