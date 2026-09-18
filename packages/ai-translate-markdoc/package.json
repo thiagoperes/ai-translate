@@ -51,7 +51,7 @@
   },
   "dependencies": {
     "@ai-translate/core": "workspace:*",
-    "@markdoc/markdoc": "0.5.9",
+    "@markdoc/markdoc": "0.5.10",
     "globby": "16.2.4",
     "gray-matter": "4.0.3"
   },
