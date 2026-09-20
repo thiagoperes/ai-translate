@@ -1,5 +1,6 @@
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,6 +43,7 @@ async function packPackages(packageDirs, tarballDir) {
     }
 
     packages.push({
+      manifest: packageJson,
       name: packageName,
       tarballPath: path.isAbsolute(tarballName) ? tarballName : path.join(tarballDir, tarballName),
       version: packageJson.version,
@@ -49,6 +51,81 @@ async function packPackages(packageDirs, tarballDir) {
   }
 
   return packages;
+}
+
+/** Serve packed releases as latest without changing the package manager's
+ * arguments. Retain published versions so existing ranges resolve normally. */
+async function createPackedRegistry(packages) {
+  const byName = new Map(packages.map((pkg) => [pkg.name, pkg]));
+  const metadata = new Map();
+  let registryUrl;
+  const server = createServer((request, response) => {
+    void (async () => {
+      try {
+        const pathname = new URL(request.url, "http://localhost").pathname;
+        const tarballIndex = /^\/packed\/(\d+)\.tgz$/u.exec(pathname)?.[1];
+        if (tarballIndex !== undefined) {
+          const pkg = packages[Number(tarballIndex)];
+          assert.ok(pkg, "Registry tarball requests must reference a packed package.");
+          response.end(await readFile(pkg.tarballPath));
+          return;
+        }
+        const packageName = decodeURIComponent(pathname.slice(1));
+        const pkg = byName.get(packageName);
+        if (!pkg) {
+          response.writeHead(302, { location: `https://registry.npmjs.org${request.url}` });
+          response.end();
+          return;
+        }
+        if (!metadata.has(packageName)) {
+          metadata.set(packageName, (async () => {
+            const upstream = await fetch(`https://registry.npmjs.org/${encodeURIComponent(packageName)}`);
+            assert.ok(upstream.ok || upstream.status === 404, `Registry metadata failed for ${packageName}.`);
+            const published = upstream.ok ? await upstream.json() : {};
+            const dependencies = Object.fromEntries(Object.entries(pkg.manifest.dependencies ?? {}).map(([name, version]) => [
+              name,
+              version === "workspace:*" ? byName.get(name).version : version,
+            ]));
+            return {
+              ...published,
+              name: packageName,
+              "dist-tags": { ...published["dist-tags"], latest: pkg.version },
+              versions: {
+                ...published.versions,
+                [pkg.version]: {
+                  ...pkg.manifest,
+                  dependencies,
+                  dist: { tarball: `${registryUrl}/packed/${packages.indexOf(pkg)}.tgz` },
+                },
+              },
+            };
+          })());
+        }
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify(await metadata.get(packageName)));
+      } catch (error) {
+        response.statusCode = 500;
+        response.end(String(error));
+      }
+    })();
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  registryUrl = `http://127.0.0.1:${server.address().port}`;
+  return {
+    url: registryUrl,
+    close: () => new Promise((resolve, reject) => {
+      server.close((error) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      });
+    }),
+  };
 }
 
 async function writePackedWorkspace(packages, consumerDir) {
@@ -205,9 +282,8 @@ async function verifyLauncher(packages, tempRoot) {
   return path.join(cwd, "node_modules/ai-translate/dist/bin.mjs");
 }
 
-/** Exercise init's real package-manager invocation. Overrides keep unpublished
- * workspace changes local; pnpm still resolves and installs the entire graph. */
-async function verifyAutomaticInstallation(packages, tempRoot, launcherBin) {
+/** Exercise init's real package-manager invocation against packed releases. */
+async function verifyAutomaticInstallation(tempRoot, launcherBin, registryUrl) {
   const cwd = path.join(tempRoot, "automatic-installation");
   await mkdir(cwd);
   await writeFile(path.join(cwd, "package.json"), JSON.stringify({
@@ -217,12 +293,11 @@ async function verifyAutomaticInstallation(packages, tempRoot, launcherBin) {
     scripts: { existing: "node --version", postinstall: 'node -e "process.exit(99)"' },
     type: "module",
   }));
-  await writePackedWorkspace(packages, cwd);
   await mkdir(path.join(cwd, "App.xcodeproj"));
   await writeFile(path.join(cwd, "App.xcodeproj/project.pbxproj"), "developmentRegion = en; knownRegions = (en, Base, fr);");
   const catalog = JSON.stringify({ sourceLanguage: "en", version: "1.0", strings: { Hello: {} } });
   await writeFile(path.join(cwd, "Localizable.xcstrings"), catalog);
-  const options = { cwd, env: { OPENAI_API_KEY: undefined } };
+  const options = { cwd, env: { OPENAI_API_KEY: undefined, npm_config_registry: registryUrl } };
   const initialized = await execa("node", [launcherBin, "init"], options);
   assert.match(initialized.stdout, /Generated configuration and source resources validated/u);
   const manifest = JSON.parse(await readFile(path.join(cwd, "package.json"), "utf8"));
@@ -236,16 +311,15 @@ async function verifyAutomaticInstallation(packages, tempRoot, launcherBin) {
   assert.equal(await readFile(path.join(cwd, "Localizable.xcstrings"), "utf8"), catalog);
 }
 
-/** Broad tarball overrides can make an old declared range look compatible.
- * Check the requested upgrade commands as well as the installed runtime. */
-async function verifyExistingToolkitUpgrade(packages, tempRoot, launcherBin) {
+/** Verify both the requested upgrades and the runtime after a real install. */
+async function verifyExistingToolkitUpgrade(packages, tempRoot, launcherBin, registryUrl) {
   const cwd = path.join(tempRoot, "existing-toolkit-upgrade");
   await mkdir(path.join(cwd, "resources/source"), { recursive: true });
   await mkdir(path.join(cwd, "resources/output"));
   const existing = {
     dependencies: { "@ai-translate/fs-json": "^0.2.4", picocolors: "1.1.1" },
     devDependencies: { "@ai-translate/cli": "^0.2.3", "@ai-translate/message-formats": "^0.1.0" },
-    optionalDependencies: { "@ai-translate/provider-openai": "^0.3.2" },
+    optionalDependencies: { "@ai-translate/provider-openai": "^0.2.3" },
   };
   await writeFile(path.join(cwd, "package.json"), JSON.stringify({
     ...existing,
@@ -254,7 +328,6 @@ async function verifyExistingToolkitUpgrade(packages, tempRoot, launcherBin) {
     private: true,
     type: "module",
   }));
-  await writePackedWorkspace(packages, cwd);
   const appConfig = JSON.stringify({ expo: {
     ios: { infoPlist: { CFBundleDevelopmentRegion: "en" } },
     locales: { en: "resources/source/English.json", fr: "resources/output/French.json" },
@@ -263,7 +336,10 @@ async function verifyExistingToolkitUpgrade(packages, tempRoot, launcherBin) {
   const source = JSON.stringify({ ios: { NSCameraUsageDescription: "Take a photo" } });
   const sourcePath = path.join(cwd, "resources/source/English.json");
   await writeFile(sourcePath, source);
-  const options = { cwd, env: { OPENAI_API_KEY: undefined } };
+  const options = { cwd, env: { OPENAI_API_KEY: undefined, npm_config_registry: registryUrl } };
+  await execa("pnpm", ["install", "--ignore-scripts"], options);
+  const oldFsJson = JSON.parse(await readFile(path.join(cwd, "node_modules/@ai-translate/fs-json/package.json"), "utf8"));
+  assert.equal(oldFsJson.version, "0.2.4", "The upgrade fixture must start with the old JSON adapter.");
   const preview = await execa("node", [launcherBin, "init", "--preview"], options);
   for (const section of Object.keys(existing)) {
     for (const name of Object.keys(existing[section]).filter((candidate) => candidate.startsWith("@ai-translate/"))) {
@@ -283,6 +359,7 @@ async function verifyExistingToolkitUpgrade(packages, tempRoot, launcherBin) {
       }
       const installed = JSON.parse(await readFile(path.join(cwd, "node_modules", name, "package.json"), "utf8"));
       assert.equal(installed.version, packages.find((pkg) => pkg.name === name)?.version);
+      process.stdout.write(`Verified upgrade: ${section}.${name} ${previous} -> ${manifest[section][name]} (installed ${installed.version})\n`);
     }
   }
   const sync = await execa("pnpm", ["exec", "ai-translate", "sync", "--dry-run"], options);
@@ -302,8 +379,13 @@ try {
   await verifyConsumer(consumerDir);
   await verifyDetectedConfigs(consumerDir);
   const launcherBin = await verifyLauncher(packages, tempRoot);
-  await verifyAutomaticInstallation(packages, tempRoot, launcherBin);
-  await verifyExistingToolkitUpgrade(packages, tempRoot, launcherBin);
+  const registry = await createPackedRegistry(packages);
+  try {
+    await verifyAutomaticInstallation(tempRoot, launcherBin, registry.url);
+    await verifyExistingToolkitUpgrade(packages, tempRoot, launcherBin, registry.url);
+  } finally {
+    await registry.close();
+  }
 } finally {
   await rm(tempRoot, { force: true, recursive: true });
 }
