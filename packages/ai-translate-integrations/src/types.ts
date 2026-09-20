@@ -11,6 +11,11 @@ export type CatalogKind = "document-json" | "namespace-json" | "adapter";
 export interface JsonCatalogPlan {
   id?: string;
   kind: "document-json" | "namespace-json";
+  /** Overrides the plan's default when composing catalogs from several runtimes. */
+  messageFormat?: IntegrationPlan["messageFormat"];
+  /** Explicit document filenames relative to rootDir, when a runtime supplies
+   * locale-to-file mappings instead of using <locale>.json. */
+  localeFiles?: Readonly<Record<string, string>>;
   /** Suffix-key plural strategy, when the ecosystem uses one. ICU-based
    * setups leave this unset because their plurals live inside the message. */
   plurals?: "i18next-v4";

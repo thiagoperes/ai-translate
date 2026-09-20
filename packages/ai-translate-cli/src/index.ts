@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+
 import {
   auditCatalogs,
   resolveStateScope,
@@ -21,6 +23,7 @@ import type { ProviderChoice } from "@ai-translate/next";
 
 import { loadConfig, loadEnvFiles } from "./config";
 import { runInit } from "./init";
+import type { PackageManager } from "./init-project";
 import { runStagedCatalogTransaction } from "./transaction";
 
 export { defineConfig } from "@ai-translate/core";
@@ -39,8 +42,10 @@ interface CommandOptions {
   identicalToSource?: IdenticalToSourcePolicy;
   locales?: string[];
   integration?: string;
+  install?: boolean;
   maxPendingTranslations?: number;
   model?: string;
+  packageManager?: string;
   preview?: boolean;
   provider?: string;
   providerPackage?: string;
@@ -68,6 +73,13 @@ function requireProviderChoice(value: string): ProviderChoice {
     throw new Error(`Option "--provider" accepts "openai" or "ai-sdk", not "${value}".`);
   }
 
+  return value;
+}
+
+function requirePackageManager(value: string): PackageManager {
+  if (value !== "npm" && value !== "pnpm" && value !== "yarn" && value !== "bun") {
+    throw new Error('Option "--package-manager" accepts npm, pnpm, yarn, or bun.');
+  }
   return value;
 }
 
@@ -396,7 +408,7 @@ function printHelp(): void {
   console.log(`ai-translate
 
 Usage:
-  ai-translate init [--integration <id>] [--provider <openai|ai-sdk>] [--provider-package <@ai-sdk/...>] [--model <id>] [--preview] [--force]
+  ai-translate init [--locale <locale>] [--integration <id>] [--provider <openai|ai-sdk>] [--provider-package <@ai-sdk/...>] [--model <id>] [--package-manager <npm|pnpm|yarn|bun>] [--no-install] [--preview] [--force]
   ai-translate validate [--config <path>]
   ai-translate check [--config <path>] [--locale <locale>] [--catalog <id>] [--unit <id>] [--include-path <json-pointer>] [--max-pending-translations <count>]
   ai-translate audit [--check] [--refresh] [--config <path>] [--locale <locale>] [--catalog <id>] [--unit <id>] [--include-path <json-pointer>]
@@ -443,6 +455,13 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
 
       const nextValue = inlineValue ?? argv[index + 1];
       switch (flag) {
+        case "no-install":
+          options.install = false;
+          break;
+        case "package-manager":
+          options.packageManager = requireOptionValue(flag, nextValue);
+          if (inlineValue === undefined) {index += 1;}
+          break;
         case "check":
           options.auditCheck = true;
           break;
@@ -587,7 +606,8 @@ export async function runCli(
     }
 
     if (parsed.command === "version") {
-      console.log("0.0.0");
+      const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
+      console.log(manifest.version);
       return 0;
     }
 
@@ -596,10 +616,14 @@ export async function runCli(
         // No loadConfig and no loadEnvFiles: init runs before either exists.
         const result = await runInit(cwd, {
           force: parsed.options.force === true,
+          install: parsed.options.install !== false,
           ...(parsed.options.integration === undefined
             ? {}
             : { integration: parsed.options.integration }),
           ...(parsed.options.model === undefined ? {} : { model: parsed.options.model }),
+          ...(parsed.options.locales === undefined ? {} : { locales: parsed.options.locales }),
+          ...(parsed.options.packageManager === undefined
+            ? {} : { packageManager: requirePackageManager(parsed.options.packageManager) }),
           preview: parsed.options.preview === true || parsed.options.dryRun === true,
           ...(parsed.options.provider === undefined
             ? {}
@@ -609,6 +633,19 @@ export async function runCli(
             : { providerPackage: parsed.options.providerPackage }),
         });
         console.log(result.lines.join("\n"));
+        if (result.configPath !== null && parsed.options.install !== false) {
+          await loadEnvFiles(cwd);
+          const { config, configPath } = await loadConfig(cwd, result.configPath);
+          // Missing translations are expected on first setup. Validate the
+          // source resources; sync/check handle the target locales afterwards.
+          const validation = await validateConfig(config, configPath, { locales: [] });
+          const errors = validation.issues.filter((issue) => issue.severity === "error");
+          if (errors.length > 0) {
+            console.error(JSON.stringify(validation, null, 2));
+            throw new Error("Setup files were created, but localization validation failed. Fix the reported resources and run npx ai-translate validate.");
+          }
+          console.log("Generated configuration and source resources validated.");
+        }
         return 0;
       }
       case "validate": {

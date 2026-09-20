@@ -140,6 +140,12 @@ importers:
 
   packages/ai-translate-keystatic: {}
 
+  packages/ai-translate-launcher:
+    dependencies:
+      '@ai-translate/cli':
+        specifier: workspace:*
+        version: link:../ai-translate-cli
+
   packages/ai-translate-markdoc:
     dependencies:
       '@ai-translate/core':

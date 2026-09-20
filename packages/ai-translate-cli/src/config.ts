@@ -7,7 +7,7 @@ import { createJiti } from "jiti";
 import { defineConfig } from "@ai-translate/core";
 import type { AiTranslateConfig } from "@ai-translate/core/types";
 
-const CONFIG_CANDIDATES = [
+export const CONFIG_CANDIDATES = [
   "ai-translate.config.ts",
   "ai-translate.config.mts",
   "ai-translate.config.js",

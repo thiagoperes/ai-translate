@@ -52,20 +52,24 @@ export interface OpenAiTransportOptions {
 /**
  * Speaks the OpenAI Chat Completions dialect of the engine's request contract.
  * Retries stay off here because the engine owns the retry and repair loop.
+ * Client creation is deferred so configuration validation and dry runs work
+ * before credentials are configured.
  */
 export function createOpenAiTransport(
   options: OpenAiTransportOptions = {},
 ): StructuredCompletionTransport {
-  if (!options.client && !options.apiKey) {
-    throw new Error("OpenAI transport requires either apiKey or client.");
-  }
   const requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
-  const client =
-    options.client ??
-    new OpenAI({ apiKey: options.apiKey, maxRetries: 0, timeout: requestTimeoutMs });
+  const apiKey = options.apiKey;
+  let client = options.client;
 
   return {
     async complete(request: StructuredCompletionRequest): Promise<unknown> {
+      if (client === undefined) {
+        if (!apiKey?.trim()) {
+          throw new Error("OpenAI transport requires either apiKey or client. Set OPENAI_API_KEY before translating.");
+        }
+        client = new OpenAI({ apiKey, maxRetries: 0, timeout: requestTimeoutMs });
+      }
       const completion = await client.chat.completions.parse(
         {
           messages: request.messages.map((message) => ({

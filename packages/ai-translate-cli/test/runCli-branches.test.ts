@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import type * as AiTranslateCore from "@ai-translate/core";
 import type { AiTranslateConfig, SyncResult } from "@ai-translate/core/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -143,8 +144,9 @@ describe("runCli branch coverage", () => {
     expect(await runCli(["--version"], "/repo")).toBe(0);
     expect(await runCli(["-v"], "/repo")).toBe(0);
 
-    expect(stdoutSpy).toHaveBeenNthCalledWith(1, "0.0.0");
-    expect(stdoutSpy).toHaveBeenNthCalledWith(2, "0.0.0");
+    const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
+    expect(stdoutSpy).toHaveBeenNthCalledWith(1, manifest.version);
+    expect(stdoutSpy).toHaveBeenNthCalledWith(2, manifest.version);
     expect(stderrSpy).not.toHaveBeenCalled();
   });
 

@@ -147,7 +147,8 @@ describe("runCli", { concurrent: false }, () => {
     const exitCode = await runCli(["-v"], cwd);
 
     expect(exitCode).toBe(0);
-    expect(stdoutSpy).toHaveBeenCalledWith("0.0.0");
+    const manifest = JSON.parse(await fs.readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
+    expect(stdoutSpy).toHaveBeenCalledWith(manifest.version);
   });
 
   it("validates the configured source catalogs", async () => {

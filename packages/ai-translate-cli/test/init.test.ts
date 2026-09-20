@@ -5,7 +5,12 @@ import * as path from "node:path";
 import type { Integration } from "@ai-translate/next";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { runInit } from "../src/init";
+import { runInit as initialize } from "../src/init";
+import type { InitOptions } from "../src/init";
+
+function runInit(cwd: string, options: InitOptions = {}) {
+  return initialize(cwd, { install: false, ...options });
+}
 
 const workspaces: string[] = [];
 
@@ -64,22 +69,17 @@ describe("runInit", () => {
     expect(result.lines.join("\n")).toContain("Detected i18next");
   });
 
-  it("writes nothing else", async () => {
-    // init's whole contract is that it produces exactly one new file. Anything
-    // more would make running it against an unfamiliar repository risky.
+  it("sets up tooling while preserving authored resources and existing dependencies", async () => {
     const files = i18nextProject();
     const root = await seedProject(files);
-    const before = JSON.stringify(
-      await Promise.all(Object.keys(files).map((name) => fs.readFile(path.join(root, name), "utf8"))),
-    );
-
     await runInit(root);
-
-    const after = JSON.stringify(
-      await Promise.all(Object.keys(files).map((name) => fs.readFile(path.join(root, name), "utf8"))),
-    );
-    expect(after).toBe(before);
-    expect(await fs.readdir(root)).toEqual(["ai-translate.config.ts", "package.json", "public"]);
+    for (const [name, contents] of Object.entries(files).filter(([fileName]) => fileName !== "package.json")) {
+      expect(await fs.readFile(path.join(root, name), "utf8")).toBe(contents);
+    }
+    const manifest = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8")) as Record<string, unknown>;
+    expect(manifest.dependencies).toEqual({ i18next: "23.0.0" });
+    expect(manifest.scripts).toEqual({ translate: "ai-translate sync", "translate:check": "ai-translate check", "translate:validate": "ai-translate validate" });
+    expect(await fs.readdir(root)).toEqual([".env.example", ".gitignore", "ai-translate.config.ts", "package.json", "public"]);
   });
 
   it("refuses to clobber an existing config", async () => {
@@ -124,7 +124,7 @@ describe("runInit", () => {
     expect(await configExists(root)).toBe(false);
   });
 
-  it("prefers the more confident setup when a project runs two libraries", async () => {
+  it("combines disjoint localization setups with their own message formats", async () => {
     const root = await seedProject({
       ...nextIntlProject(),
       "i18n/request.ts": "export default getRequestConfig(async () => ({}));",
@@ -137,8 +137,9 @@ describe("runInit", () => {
 
     const result = await runInit(root, { preview: true });
 
-    expect(result.setup.integrationId).toBe("next-intl");
-    expect(result.lines.join("\n")).toContain("Also detected, not used: i18next");
+    expect(result.setup.integrationId).toBe("next-intl+i18next");
+    expect(result.lines.join("\n")).toContain("messageFormat: icuMessageFormat");
+    expect(result.lines.join("\n")).toContain("messageFormat: i18nextMessageFormat");
   });
 
   it("refuses to guess between two equally confident setups", async () => {
@@ -196,7 +197,7 @@ describe("runInit", () => {
     const root = await seedProject(i18nextProject());
 
     expect((await runInit(root)).lines.join("\n")).toContain(
-      "Install: @ai-translate/cli @ai-translate/fs-json @ai-translate/message-formats " +
+      "Install dependencies: npm install --save-dev --ignore-scripts @ai-translate/cli @ai-translate/fs-json @ai-translate/message-formats " +
         "@ai-translate/provider-openai",
     );
   });
@@ -210,13 +211,13 @@ describe("runInit", () => {
     });
 
     expect(lines.join("\n")).toContain(
-      "Install: @ai-translate/cli @ai-translate/fs-json @ai-translate/message-formats " +
+      "Install dependencies: npm install --save-dev --ignore-scripts @ai-translate/cli @ai-translate/fs-json @ai-translate/message-formats " +
         "@ai-translate/provider-ai-sdk ai @ai-sdk/anthropic",
     );
-    expect(lines.join("\n")).toContain("the API key your @ai-sdk/anthropic provider reads");
+    expect(lines.join("\n")).toContain("Set ANTHROPIC_API_KEY");
   });
 
-  it("omits the install step once the packages are declared", async () => {
+  it("installs declared dependencies for fresh clones without adding them again", async () => {
     const root = await seedProject(
       i18nextProject({
         "package.json": JSON.stringify({
@@ -231,7 +232,7 @@ describe("runInit", () => {
       }),
     );
 
-    expect((await runInit(root)).lines.join("\n")).not.toContain("Install:");
+    expect((await runInit(root)).lines.join("\n")).toContain("Install dependencies: npm install --ignore-scripts\n");
   });
 
   it("surfaces detection warnings next to the config it wrote", async () => {
@@ -286,12 +287,96 @@ describe("native project initialization", () => {
     expect(written).toContain("createAppleStringCatalog({");
     expect(written).toContain("createAppleStringsCatalog({");
     expect(written).toContain('"include": ["App/Localizable.xcstrings","Package/Resources/Localizable.xcstrings"],');
-    expect(result.lines.join("\n")).toContain("Install: @ai-translate/cli @ai-translate/fs-json @ai-translate/apple @ai-translate/provider-openai");
+    expect(result.lines.join("\n")).toContain("Install dependencies: npm install --save-dev --ignore-scripts @ai-translate/cli @ai-translate/fs-json @ai-translate/apple @ai-translate/provider-openai");
   });
 
   it("explains the required externalization for Expo and Tauri without resources", async () => {
     const root = await seedProject({ "package.json": '{"dependencies":{"expo":"55"}}', "src/App.tsx": '<Text>Hello</Text>', "src-tauri/tauri.conf.json": '{}' });
     await expect(runInit(root)).rejects.toThrow(/first externalize strings into localization resources/u);
+    expect(await configExists(root)).toBe(false);
+  });
+});
+
+describe("automatic setup safeguards", () => {
+  it("resumes identical setup without duplicating scripts or templates", async () => {
+    const root = await seedProject(i18nextProject());
+    await runInit(root);
+    const names = ["ai-translate.config.ts", "package.json", ".gitignore", ".env.example"];
+    const before = await Promise.all(names.map((name) => fs.readFile(path.join(root, name), "utf8")));
+    await runInit(root);
+    expect(await Promise.all(names.map((name) => fs.readFile(path.join(root, name), "utf8")))).toEqual(before);
+  });
+
+  it.each(["mts", "js", "mjs"])("protects an existing .%s config and previews without shadowing it", async (extension) => {
+    const name = `ai-translate.config.${extension}`;
+    const root = await seedProject(i18nextProject({ [name]: "// custom config\n" }));
+    await expect(runInit(root)).rejects.toThrow(/already exists/u);
+    const result = await runInit(root, { preview: true });
+    expect(result.lines.join("\n")).toContain(`Would write ${name}`);
+    expect(await configExists(root)).toBe(false);
+    expect(await fs.readFile(path.join(root, name), "utf8")).toBe("// custom config\n");
+    await runInit(root, { force: true });
+    expect(await fs.readFile(path.join(root, name), "utf8")).toContain("defineConfig");
+    expect(await configExists(root)).toBe(false);
+  });
+
+  it("refuses multiple configs even when force is requested", async () => {
+    const root = await seedProject(i18nextProject({ "ai-translate.config.ts": "a", "ai-translate.config.mjs": "b" }));
+    await expect(runInit(root, { force: true })).rejects.toThrow(/Multiple ai-translate configs/u);
+    expect(await fs.readFile(path.join(root, "ai-translate.config.ts"), "utf8")).toBe("a");
+  });
+
+  it.each(["ai-translate.config.ts", ".gitignore", ".env.example", "package.json"])("rejects a symlinked %s before writing any setup files", async (name) => {
+    const root = await seedProject(i18nextProject());
+    const outside = await seedProject({ target: name === "package.json" ? JSON.stringify({ dependencies: { i18next: "23" } }) : "original" });
+    await fs.rm(path.join(root, name), { force: true });
+    await fs.symlink(path.join(outside, "target"), path.join(root, name));
+    const before = await fs.readdir(root);
+    await expect(runInit(root, { force: true })).rejects.toThrow(/regular file/u);
+    expect(await fs.readdir(root)).toEqual(before);
+    expect(await fs.readFile(path.join(outside, "target"), "utf8")).toBe(name === "package.json" ? JSON.stringify({ dependencies: { i18next: "23" } }) : "original");
+  });
+
+  it("validates the manifest before creating a native config", async () => {
+    const root = await seedProject({ "App.xcodeproj/project.pbxproj": "developmentRegion = en; knownRegions = (en,fr);", "package.json": "{broken" });
+    await expect(runInit(root)).rejects.toThrow(/Invalid JSON/u);
+    expect(await fs.readdir(root)).toEqual(["App.xcodeproj", "package.json"]);
+  });
+
+  it("previews all tooling changes without writes", async () => {
+    const root = await seedProject(i18nextProject());
+    const before = await fs.readdir(root);
+    const result = await runInit(root, { preview: true, install: true, packageManager: "bun" });
+    expect(result.lines.join("\n")).toContain("Would write package.json");
+    expect(result.lines.join("\n")).toContain("bun add --dev --ignore-scripts");
+    expect(await fs.readdir(root)).toEqual(before);
+  });
+
+  it("preserves existing scripts, ignore entries, credentials templates and local secrets", async () => {
+    const root = await seedProject(i18nextProject({
+      "package.json": JSON.stringify({ scripts: { translate: "custom-command" }, dependencies: { i18next: "23.0.0" } }),
+      ".gitignore": "build/\r\n",
+      ".env.example": "OPENAI_API_KEY=example\nEXTRA=keep\n",
+      ".env.local": "OPENAI_API_KEY=local-secret\n",
+    }));
+    const result = await runInit(root);
+    expect(await fs.readFile(path.join(root, ".env.example"), "utf8")).toBe("OPENAI_API_KEY=example\nEXTRA=keep\n");
+    expect(await fs.readFile(path.join(root, ".env.local"), "utf8")).toBe("OPENAI_API_KEY=local-secret\n");
+    expect(await fs.readFile(path.join(root, ".gitignore"), "utf8")).toContain("build/\r\nnode_modules/\r\n");
+    expect(await fs.readFile(path.join(root, "package.json"), "utf8")).toContain('"translate": "custom-command"');
+    expect(result.lines.join("\n")).not.toContain("local-secret");
+  });
+
+  it("accepts explicit target locales for a native starter", async () => {
+    const root = await seedProject({ "App.xcodeproj/project.pbxproj": "developmentRegion = en; knownRegions = (en,Base);" });
+    const result = await runInit(root, { locales: ["fr", "pl", "fr"] });
+    expect(result.setup.plan.targetLocales).toEqual(["fr", "pl"]);
+    expect(await fs.readFile(path.join(root, "package.json"), "utf8")).toContain('"private": true');
+  });
+
+  it.each([["EN"], ["../de"], ["fr", "FR"]])("rejects invalid or ambiguous explicit locale lists %j without writes", async (...locales) => {
+    const root = await seedProject(i18nextProject());
+    await expect(runInit(root, { locales })).rejects.toThrow(/locale|Locale/u);
     expect(await configExists(root)).toBe(false);
   });
 });

@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import * as path from "node:path";
 
 import type { MessageFormat } from "@ai-translate/core/message-format";
 import type { PluralKeyStrategy } from "@ai-translate/core/plural";
@@ -28,19 +29,40 @@ interface LocalizedJsonDocumentOptions {
   /** Enables suffix-key plural handling. ICU-based setups need nothing here
    * because their plurals live inside the message. */
   plurals?: PluralKeyStrategy;
+  /** Explicit paths relative to rootDir for runtimes that map locales to
+   * arbitrary filenames. Unmapped locales retain the <locale>.json convention. */
+  localeFiles?: Readonly<Record<string, string>>;
   rootDir: string;
   sourceLocale: string;
   unitId: string;
-}
-
-function toFilePath(rootDir: string, locale: string): string {
-  return `${rootDir}/${locale}.json`;
 }
 
 export function createLocalizedJsonDocument(
   options: LocalizedJsonDocumentOptions,
 ): CatalogAdapter {
   const catalogId = options.id ?? "localized-json";
+  const localeFiles = new Map<string, string>();
+  const mappedFiles = new Set<string>();
+  const fileIdentity = (file: string): string => file.normalize("NFC").toLowerCase();
+  for (const [locale, file] of Object.entries(options.localeFiles ?? {})) {
+    const normalized = path.posix.normalize(file);
+    if (file.length === 0 || file.includes("\\") || file.includes("\0") || path.posix.isAbsolute(file) ||
+      /^[A-Za-z]:/u.test(file) || normalized === "." || normalized === ".." || normalized.startsWith("../")) {
+      throw new Error(`Invalid localeFiles path for ${locale}: expected a file within rootDir.`);
+    }
+    if (mappedFiles.has(fileIdentity(normalized))) {
+      throw new Error(`localeFiles maps multiple locales to ${normalized}.`);
+    }
+    localeFiles.set(locale, normalized);
+    mappedFiles.add(fileIdentity(normalized));
+  }
+  function toFilePath(locale: string): string {
+    const file = localeFiles.get(locale) ?? `${locale}.json`;
+    if (!localeFiles.has(locale) && mappedFiles.has(fileIdentity(file))) {
+      throw new Error(`Locale ${locale} would overwrite another locale's mapped file ${file}.`);
+    }
+    return `${options.rootDir}/${file}`;
+  }
   const entryOptions: JsonEntryOptions = {
     ...(options.messageFormat === undefined ? {} : { messageFormat: options.messageFormat }),
     ...(options.plurals === undefined ? {} : { plurals: options.plurals }),
@@ -65,7 +87,7 @@ export function createLocalizedJsonDocument(
       return createDocumentRef({
         catalogId,
         locale,
-        path: toFilePath(options.rootDir, locale),
+        path: toFilePath(locale),
         unitId: sourceRef.unitId,
       });
     },
@@ -77,7 +99,7 @@ export function createLocalizedJsonDocument(
         createDocumentRef({
           catalogId,
           locale: sourceLocale,
-          path: toFilePath(options.rootDir, sourceLocale),
+          path: toFilePath(sourceLocale),
           unitId: options.unitId,
         }),
       ]);
@@ -133,7 +155,7 @@ export function createLocalizedJsonDocument(
         strategy === "copy-source"
           ? options.sourceLocale
           : scaffoldOptions.fromLocale ?? options.sourceLocale;
-      const targetPath = toFilePath(options.rootDir, scaffoldOptions.locale);
+      const targetPath = toFilePath(scaffoldOptions.locale);
       if (await pathExists(targetPath)) {
         return {
           catalogId,
@@ -144,7 +166,7 @@ export function createLocalizedJsonDocument(
         };
       }
 
-      const sourceRoot = await readJsonFile(toFilePath(options.rootDir, fromLocale));
+      const sourceRoot = await readJsonFile(toFilePath(fromLocale));
       if (sourceRoot === null) {
         return {
           catalogId,
