@@ -17,6 +17,27 @@ function boundCodes(sourceText: string, targetText: string, bindings: string): s
 }
 
 describe("applePrintfMessageFormat", () => {
+  it("bounds parsing work for long invalid flag runs in text and substitution metadata", () => {
+    const flags = "0".repeat(50_000);
+    const started = performance.now();
+    expect(codes(`%${flags}!`, "Safe")).toContain("apple-printf-source-invalid");
+    expect(boundCodes("%#@count@", "%#@count@", JSON.stringify({ count: [1, `${flags}!`] })))
+      .toContain("apple-printf-source-invalid");
+    // The old overlapping flags/width expression takes seconds for these
+    // inputs. Linear parsing has ample headroom even on a busy CI runner.
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  it.each(["%000d", "%0012d", "%1$00012.004lld", "%0*.*f", "%2$0*1$d"])(
+    "retains complete conversion semantics when flags and widths share zeroes: %s",
+    (value) => {
+      expect(codes(value, value)).toEqual([]);
+      expect(applePrintfMessageFormat.tokenize(value)).toEqual([
+        expect.objectContaining({ raw: value, syntax: "printf", type: "placeholder" }),
+      ]);
+    },
+  );
+
   it("protects complete conversions while leaving prose translatable", () => {
     expect(applePrintfMessageFormat.tokenize("Hello %@: %04lld, %+.2f%%")).toEqual([
       { raw: "Hello ", type: "text" },

@@ -268,7 +268,7 @@ describe("createAppleStringsCatalog", () => {
     expect(await fs.readFile(targetPath)).toEqual(first);
     const sourcePath = path.join(rootDir, "en.lproj/Localizable.strings");
     expect(await fs.readFile(sourcePath, "utf8")).toBe(sourceText);
-    await fs.writeFile(sourcePath, sourceText.replace("}", '"Next";\n}'));
+    await fs.writeFile(sourcePath, `${sourceText.slice(0, -1)}"Next";\n}`);
     expect((await syncCatalogs(config)).metrics.translatedEntries).toBe(1);
     const added = decodeStrings(await fs.readFile(targetPath)).text;
     expect(parseStrings(added).records.at(-1)).toMatchObject({ key: "Next", value: "Nächste" });

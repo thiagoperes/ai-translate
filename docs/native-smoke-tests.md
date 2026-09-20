@@ -5,8 +5,9 @@ read the current Swift sources and project metadata from the local app checkouts
 Extraction, generated configuration, translation state, compiled resources, and
 runtime harnesses lived in temporary directories. No app files were changed.
 
-The completed workspace validation passed 1,239 tests, with one pre-existing
-optional Next.js fixture skipped. This round added 29 regression cases. Lint,
+The completed workspace validation passed 1,245 tests, with one pre-existing
+optional Next.js fixture skipped. The review added 29 regression cases, followed
+by six printf parser cases during release security checks. Lint,
 typechecking, builds, packed-package smoke tests, and coverage gates passed.
 The Apple package has 98.02% line and 93.48% branch coverage.
 
@@ -70,6 +71,10 @@ The local app checkouts are not required for the repository test suite.
   spelling, nested Expo ignore rules, Swift raw strings, and authored bundles.
 - `files.test.ts` verifies existing native file permissions survive restrictive
   process umasks while new files keep normal umask behavior.
+- `apple-printf.test.ts` bounds work on malformed zero-filled directives and
+  preserves formatting when flags and widths share zeroes. A separate comparison
+  against the previous parser found identical results for 20,000 short generated
+  inputs; the adversarial 8,000-zero input fell from roughly 140 ms to 0.1 ms.
 
 Run the focused checks on macOS with Xcode installed:
 

@@ -12,9 +12,24 @@ interface ParsedFormat {
 // Keep the complete conversion protected, including presentation details. A
 // translator may reorder numbered arguments, but cannot safely change the
 // caller's argument types, precision, or dynamic width/precision arguments.
-const CONVERSION =
-  /^%(?:(\d+)\$)?([-+#0 ']*)(\*(?:\d+\$)?|\d+)?(?:\.(\*(?:\d+\$)?|\d*))?(hh|ll|[hlLqjzt])?([@diuoxXfFeEgGaAcCsSpDUO])/u;
+const CONVERSION_BODY =
+  /^(\*(?:\d+\$)?|\d+)?(?:\.(\*(?:\d+\$)?|\d*))?(hh|ll|[hlLqjzt])?([@diuoxXfFeEgGaAcCsSpDUO])/u;
 const SUBSTITUTION = /^%(?:(\d+)\$)?#@([^@]+)@/u;
+
+/** Commit each prefix before parsing the next. Combining flags and width in
+ * one expression makes an invalid run of zeroes backtrack quadratically: each
+ * zero can be either a flag or part of the width. Both callers start at '%'. */
+function parseConversion(value: string) {
+  const position = /^%(\d+)\$/u.exec(value);
+  const prefixLength = position?.[0].length ?? 1;
+  const flags = /^[-+#0 ']*/u.exec(value.slice(prefixLength))?.[0] ?? "";
+  const bodyStart = prefixLength + flags.length;
+  const body = CONVERSION_BODY.exec(value.slice(bodyStart));
+  return body === null ? null : [
+    value.slice(0, bodyStart + body[0].length), position?.[1], flags,
+    body[1], body[2], body[3], body[4],
+  ] as const;
+}
 
 function argumentType(length: string, specifier: string): string {
   if ("diuoxXDUO".includes(specifier)) {
@@ -71,7 +86,7 @@ function catalogBindings(entry: Readonly<Entry> | undefined): {
   for (const [name, value] of Object.entries(parsed)) {
     const parts = Array.isArray(value) ? value as unknown[] : [];
     const position = parts[0];
-    const format = typeof parts[1] === "string" ? CONVERSION.exec(`%${parts[1]}`) : null;
+    const format = typeof parts[1] === "string" ? parseConversion(`%${parts[1]}`) : null;
     if (parts.length !== 2 || typeof position !== "number" || !Number.isSafeInteger(position) || position < 1 ||
       format === null || format[0] !== `%${String(parts[1])}` || format[1] !== undefined ||
       format[3]?.startsWith("*") === true || format[4]?.startsWith("*") === true ||
@@ -139,7 +154,7 @@ function parse(value: string, bindings?: ReadonlyMap<string, SubstitutionBinding
     } else {
       const substitution = SUBSTITUTION.exec(tail);
       const conversion =
-        substitution === null && !/^%(?:\d+\$)?#@/u.test(tail) ? CONVERSION.exec(tail) : null;
+        substitution === null && !/^%(?:\d+\$)?#@/u.test(tail) ? parseConversion(tail) : null;
       if (substitution !== null) {
         raw = substitution[0];
         const name = substitution[2] ?? "";
@@ -157,7 +172,7 @@ function parse(value: string, bindings?: ReadonlyMap<string, SubstitutionBinding
         signature = `${String(position)}:#@${name}@`;
       } else if (conversion !== null) {
         raw = conversion[0];
-        const [, explicit, flags = "", width, precision, length = "", specifier = ""] = conversion;
+        const [, explicit, flags, width, precision, length = "", specifier = ""] = conversion;
         if (!validLength(length, specifier)) {
           result.errors.push(`Invalid length modifier in ${raw}.`);
         }

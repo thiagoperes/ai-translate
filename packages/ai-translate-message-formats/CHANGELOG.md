@@ -4,6 +4,10 @@
 
 ### Minor Changes
 
+- Parse Apple printf positions, flags, and widths separately to avoid quadratic
+  backtracking on malformed zero-filled directives. Preserve existing token and
+  argument semantics, with regressions for both message text and catalog bindings.
+
 - [`73a3630`](https://github.com/thiagoperes/ai-translate/commit/73a363060564659139f7c995d762f57d579bd34a) Thanks [@thiagoperes](https://github.com/thiagoperes)! - Add native Xcode String Catalog and Apple strings-table adapters, Apple printf
   validation, and composable project discovery with Apple setup detection. Native
   catalogs preserve source text, metadata, and sibling locales while supporting
