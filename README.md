@@ -1,6 +1,6 @@
 # ai-translate
 
-**AI-powered localization for JSON, Markdoc, HTML, and Next.js content — incremental, validated, and built for CI.**
+**AI-powered localization for Apple apps, JSON, Markdoc, HTML, and Next.js — incremental, validated, and built for CI.**
 
 [![CI](https://github.com/thiagoperes/ai-translate/actions/workflows/ci.yml/badge.svg)](https://github.com/thiagoperes/ai-translate/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -15,7 +15,7 @@ Key features:
 | ⚡ **Incremental** | Translate only new or changed strings. |
 | 🛡️ **Validated** | Protect placeholders, tags, glossary terms, and structure. |
 | ✅ **CI-ready** | Catch stale locales with a read-only `check`. |
-| 🧩 **Flexible** | Supports JSON, Markdoc, HTML, ICU, i18next, and Next.js. |
+| 🧩 **Flexible** | Supports Xcode string catalogs, Apple `.strings`, JSON, Markdoc, HTML, ICU, i18next, and Next.js. |
 | ✍️ **Human-friendly** | Preserve manual edits with atomic writes. |
 | 📈 **Scalable** | Use sharded state, scoped runs, and pluggable providers. |
 | 💸 **Cheap** | Around [$1 per million source words, per locale](#what-it-costs). |
@@ -90,13 +90,35 @@ Requires Node 20.19 or newer. The provider packages need Node 22+, because the
 
 ## Quickstart
 
+### iOS, macOS, Swift, or Expo?
+
+Use [`@ai-translate/apple`](packages/ai-translate-apple) for Xcode `.xcstrings`
+catalogs and `.lproj/*.strings` resources. Apple printf placeholders are validated
+automatically, and translator comments become request context. Multiple locales
+in one string catalog are updated without replacing the source or other locales.
+
+```bash
+npm install --save-dev @ai-translate/cli @ai-translate/apple @ai-translate/fs-json @ai-translate/provider-openai
+npx ai-translate init --integration apple --preview
+```
+
+For Expo, translate committed `expo.locales` JSON with the existing JSON adapter
+and `applePrintfMessageFormat`; Expo prebuild generates the native resources.
+Compose it with an i18next JSON catalog for shared React Native/Tauri UI.
+
+The [native app guide](docs/native-apps.md) covers initial extraction, Swift
+package bundles, Xcode target membership, Expo permission strings, and concrete
+setup recipes for `translator-rn`, `newsblocker`, and `tools`. Existing hardcoded
+UI text needs resource extraction and runtime lookups before a translated
+catalog can affect the app.
+
 ### Already using Next.js?
 
 ```bash
 npx ai-translate init
 ```
 
-`init` inspects the project, works out whether it uses **next-intl** or **i18next**, finds the message files, reads the locale list and the default locale, and writes an `ai-translate.config.ts` wired to what it found. It prints the evidence for every conclusion, and writes nothing else — installing packages and setting `OPENAI_API_KEY` stay in your hands.
+`init` inspects the project for **next-intl**, **i18next**, or **Apple resources**, finds the message files, reads the locale list and the default locale, and writes an `ai-translate.config.ts` wired to what it found. It prints the evidence for every conclusion, and writes nothing else — installing packages and setting `OPENAI_API_KEY` stay in your hands.
 
 ```text
 Detected i18next:
@@ -106,7 +128,7 @@ Detected i18next:
   - Source locale en, 15 target locale(s): de, el, es, et, fi, fr, ga, hr, it, lt, lv, nl, pt, sk, sl
 ```
 
-Use `--preview` to see the config without writing it, and `--integration <id>` if the project runs more than one library. Detection is read-only and never imports project code; see [`@ai-translate/next`](packages/ai-translate-next) to add your own integration.
+Use `--preview` to see the config without writing it, and `--integration <id>` if the project runs more than one library. Detection is read-only and never imports project code; see [`@ai-translate/integrations`](packages/ai-translate-integrations) to add your own integration.
 
 To generate a config that runs on a model other than OpenAI's, add `--provider ai-sdk` and name the AI SDK vendor package:
 
@@ -183,7 +205,7 @@ Then wire the gate into CI:
 
 | Command | What it does |
 | --- | --- |
-| `init` | Detect a Next.js localization setup and write `ai-translate.config.ts` for it. |
+| `init` | Detect Apple or Next.js/i18next localization and write `ai-translate.config.ts`. |
 | `sync` | Translate everything that needs it, validate, audit, and write. |
 | `check` | Read-only CI gate. Fails if validation, a dry-run sync, or audit provenance would produce work. |
 | `validate` | Structural and source-level validation only, no provider calls. |
@@ -201,10 +223,12 @@ Every command accepts `--config` plus the scoping flags above. See the [CLI READ
 | [`@ai-translate/core`](packages/ai-translate-core) | The engine: reconciliation, state, validators, audits, and all shared types. |
 | [`@ai-translate/cli`](packages/ai-translate-cli) | The `ai-translate` command, config loading, and staged transactions. |
 | [`@ai-translate/fs-json`](packages/ai-translate-fs-json) | JSON catalog adapters, state stores, and the candidate cache. |
+| [`@ai-translate/apple`](packages/ai-translate-apple) | Xcode string catalogs, Apple `.strings`, and native project discovery. |
+| [`@ai-translate/integrations`](packages/ai-translate-integrations) | Platform-neutral project discovery and composable config plans. |
 | [`@ai-translate/markdoc`](packages/ai-translate-markdoc) | Markdoc catalog adapter, including frontmatter and tag attributes. |
 | [`@ai-translate/html`](packages/ai-translate-html) | HTML catalog adapter for text nodes and translatable attributes. |
 | [`@ai-translate/keystatic`](packages/ai-translate-keystatic) | Localized singleton paths and locale seeds for Keystatic. |
-| [`@ai-translate/message-formats`](packages/ai-translate-message-formats) | ICU and i18next message formats, plus CLDR plural key strategies. |
+| [`@ai-translate/message-formats`](packages/ai-translate-message-formats) | Apple printf, ICU, and i18next message formats, plus CLDR plural key strategies. |
 | [`@ai-translate/next`](packages/ai-translate-next) | Next.js auto-discovery for next-intl and i18next, and config generation. |
 | [`@ai-translate/provider-core`](packages/ai-translate-provider-core) | The vendor-neutral generation engine: prompting, batching, repair, and the output contract. |
 | [`@ai-translate/provider-openai`](packages/ai-translate-provider-openai) | OpenAI translation and semantic-audit providers. |

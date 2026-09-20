@@ -4428,6 +4428,31 @@ describe("translation guardrails", () => {
     expect(requestedPointers).toEqual(["/manual", "/legacy"]);
   });
 
+  it.each(["preserve", "retranslate"] as const)("honors %s when source and generated target are edited before the same sync", async (manualOriginPolicy) => {
+    const catalog = createMemoryCatalog();
+    const state = createStateStore();
+    seedSource(catalog, [stringEntry("title", "Fuel cards")]);
+    const translate = vi.fn<TranslationProvider["translate"]>(async ({ requests }) =>
+      requests.map(({ key }) => ({ key, translation: "Traduction générée" })));
+    const config: AiTranslateConfig = {
+      catalogs: [catalog], state, provider: { translate },
+      sourceLocale: "en", targetLocales: ["fr"], manualOriginPolicy,
+    };
+    await syncCatalogs(config);
+    const source = catalog.documents.get("en:common")?.entries[0];
+    const target = catalog.documents.get("fr:common")?.entries[0];
+    if (!source || !target) { throw new Error("Missing manual-edit fixture"); }
+    source.value = "Business fuel cards";
+    target.value = "Correction humaine";
+    translate.mockClear();
+    const result = await syncCatalogs(config);
+    expect(result.metrics.staleManualEntries).toBe(manualOriginPolicy === "preserve" ? 1 : 0);
+    expect(translate).toHaveBeenCalledTimes(manualOriginPolicy === "preserve" ? 0 : 1);
+    expect(catalog.documents.get("fr:common")?.entries[0]?.value).toBe(
+      manualOriginPolicy === "preserve" ? "Correction humaine" : "Traduction générée",
+    );
+  });
+
   it("can reclaim manual translations while preserving them by default", async () => {
     const catalog = createMemoryCatalog();
     const state = createStateStore();

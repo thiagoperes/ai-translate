@@ -56,15 +56,25 @@ This is how a provider API key normally reaches your config, for example `apiKey
 
 ### `init`
 
-Detects the project's Next.js localization setup and writes `ai-translate.config.ts` for it. This is the only command that runs without an existing config.
+Detects the project's localization resources and writes `ai-translate.config.ts`. This is the only command that runs without an existing config.
 
 ```bash
 ai-translate init
 ai-translate init --preview
 ai-translate init --integration i18next
+ai-translate init --integration apple --preview
 ```
 
-Recognises **next-intl** and **i18next** (including `react-i18next` and `next-i18next`), inferring the message layout, the locale list, and the source locale, then printing the evidence behind each conclusion.
+Recognises **next-intl**, **i18next** (including Expo/React Native projects using `react-i18next`), and **Apple localization** (`.xcstrings` catalogs and `.lproj/*.strings` tables). Detection infers source and target languages from resources and Xcode settings and prints the evidence behind each conclusion. Multiple native resource roots become one configuration.
+
+For an Xcode or Apple Swift package project without resources, `init` writes a starter config with explicit extraction instructions. Create and populate a String Catalog with Xcode, then configure your target languages. `init` does not extract hardcoded Swift, JavaScript, or Rust text and never invents target languages. Expo and Tauri projects without localization resources must externalize their text first.
+
+Native configs use explicit file includes; an empty starter uses `include: []`.
+After creating or repairing resources, review `init --preview` and update the
+includes. Detection partitions mixed Base/source tables, reports neighboring
+projects with different source languages, and excludes generated native output.
+
+Custom detectors use the platform-neutral `@ai-translate/integrations` interfaces. Adapter plans declare the package, factory export, and literal options, so adding a platform does not require changing the CLI's config renderer. `@ai-translate/next` retains its existing detection APIs for compatibility.
 
 It writes exactly one file and nothing else. Installing packages, setting `OPENAI_API_KEY`, and reviewing the model choice are printed as next steps rather than done for you, so running it against an unfamiliar repository is safe.
 
@@ -87,6 +97,10 @@ ai-translate sync --locale de --catalog messages
 ```
 
 Writes happen inside a staged transaction: files and state are committed together only if the run converges, so an interrupted or failing sync leaves your content untouched. When semantic audits reject a translation, the run retries it up to `validation.semanticRepairAttempts` times before failing.
+
+Before committing, the CLI verifies that live files still match the snapshots it
+staged. If a developer or Xcode saved a file during translation, the run aborts
+without replacing those edits. Rerun to translate from the updated resources.
 
 Exits non-zero if any entry failed, if audits did not converge, or if a `--dry-run` exceeded the configured `validation.dryRunBudget`.
 

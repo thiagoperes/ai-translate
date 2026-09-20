@@ -5,6 +5,7 @@ import {
   createAcceptedContractRevision,
   hasCompleteAcceptedSemanticAuditProvenance,
   resolveAcceptedContractRevision,
+  resolveRequestContext,
   type SemanticAuditAcceptanceIdentity,
   withTranslationIssueCache,
 } from "../src/acceptance";
@@ -56,6 +57,22 @@ const baseArgs = {
   targetText: "Eine qualifizierte Aussage",
   unitId: "messages",
 };
+
+it("makes source translator context available to an explicit request resolver", () => {
+  const sourceEntry = { ...entry, context: { notes: "A button label.", purpose: "UI" } };
+  const resolver = vi.fn<NonNullable<AiTranslateConfig["requestContext"]>>(({ context }) => context);
+  const args = {
+    baseContext: { notes: "Use formal language." },
+    catalogId: "messages", config: config({ requestContext: resolver }),
+    contentRole: undefined, entry: sourceEntry, locale: "de", path: "/claim", unitId: "messages",
+  };
+  expect(resolveRequestContext(args).context).toEqual({
+    notes: "Use formal language.\nA button label.", purpose: "UI",
+  });
+  expect(resolver).toHaveBeenCalledOnce();
+  expect(resolveRequestContext({ ...args, config: config({ requestContext: () => undefined }) }).context).toBeUndefined();
+  expect(args.baseContext).toEqual({ notes: "Use formal language." });
+});
 
 function stableValue(value: unknown): unknown {
   if (Array.isArray(value)) {

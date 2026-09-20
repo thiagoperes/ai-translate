@@ -5,6 +5,7 @@ import { promises as fs } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { digestValue } from "@ai-translate/core/hash";
+import type { CatalogAdapter, Entry } from "@ai-translate/core/types";
 
 import {
   adoptExistingTranslations,
@@ -77,6 +78,29 @@ describe("json state store", () => {
   });
 
   describe("adoptExistingTranslations", () => {
+    it("adopts target-specific plural arms from the adapter's localized source", async () => {
+      const entry = (key: string, value: string): Entry => ({
+        address: [{ kind: "key", key }], policy: "translate", storage: "string", value,
+      });
+      const ref = { catalogId: "native", format: "xcstrings", locale: "en", path: "/catalog", unitId: "Localizable" };
+      const catalog: CatalogAdapter = {
+        id: "native",
+        createDocumentRef: (source, locale) => ({ ...source, locale }),
+        listDocumentRefs: async () => [ref],
+        loadDocument: async (documentRef) => ({
+          ref: documentRef, state: {}, entries: documentRef.locale === "en"
+            ? [entry("other", "Messages")]
+            : [entry("other", "Wiadomości"), entry("few", "Wiadomości")],
+        }),
+        localizeSourceDocument: async ({ source }) => ({ ...source, entries: [...source.entries, entry("few", "Messages")] }),
+        reconcileDocument: async ({ source }) => source,
+        writeDocument: async () => {},
+      };
+      const result = await adoptExistingTranslations({ catalogs: [catalog], sourceLocale: "en", targetLocales: ["pl"] });
+      expect(result.adopted).toBe(2);
+      expect(Object.values(result.state.entries).map(({ jsonPointer }) => jsonPointer)).toEqual(["/other", "/few"]);
+    });
+
     async function seedCatalog(source: unknown, target: unknown) {
       const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-translate-adopt-"));
       const localesDir = path.join(rootDir, "locales");

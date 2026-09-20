@@ -1,5 +1,12 @@
 # @ai-translate/markdoc
 
+## 0.3.3
+
+### Patch Changes
+
+- Updated dependencies [[`73a3630`](https://github.com/thiagoperes/ai-translate/commit/73a363060564659139f7c995d762f57d579bd34a)]:
+  - @ai-translate/core@0.4.0
+
 ## 0.3.2
 
 ### Patch Changes

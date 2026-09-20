@@ -13,6 +13,7 @@ import type {
   SemanticAuditProvider,
   SemanticAuditRequest,
   SemanticAuditResponse,
+  Token,
   TranslationConstraint,
   TranslationContentRole,
   TranslationContext,
@@ -1005,6 +1006,15 @@ function protectedCodeSourceLiterals(value: string): readonly string[] {
   ].toSorted((left, right) => right.length - left.length || left.localeCompare(right));
 }
 
+function sourceTextTokens(request: TranslationRequest): readonly Token[] {
+  // Formats such as ICU can expose structural tokens rather than source spans.
+  // Only lossless streams are suitable for replacing text with protected slots.
+  const tokens = request.tokens;
+  return tokens !== undefined && tokens.map(({ raw }) => raw).join("") === request.sourceText
+    ? tokens
+    : tokenizeText(request.sourceText);
+}
+
 function protectRequestText(
   request: TranslationRequest,
   effectiveContext: TranslationContext | undefined = request.context,
@@ -1012,7 +1022,7 @@ function protectRequestText(
   const destinations: ProtectedMarkdownDestination[] = [];
   const structuralSlots: ProtectedAssemblySlot[] = [];
   const activeFormatting = new Set<string>();
-  const sourceTokens = tokenizeText(request.sourceText);
+  const sourceTokens = sourceTextTokens(request);
   const textWithProtectedStructure = sourceTokens
     .map((token, index) => {
       if (token.type === "text") {
@@ -1534,7 +1544,7 @@ function createBatches(
       request.sourceText.length > 1_000 ||
       request.outputContract !== undefined ||
       hasValidatorFeedback(request.context) ||
-      tokenizeText(request.sourceText).some(({ type }) => type !== "text")
+      sourceTextTokens(request).some(({ type }) => type !== "text")
     ) {
       return 1;
     }
@@ -1560,7 +1570,7 @@ function createBatches(
           total +
           (Math.ceil((Buffer.byteLength(item.sourceText, "utf8") * 2) / 3) +
             80 +
-            tokenizeText(item.sourceText).length * 16) *
+            sourceTextTokens(item).length * 16) *
             (item.outputContract?.candidateCount ?? 1),
         0,
       ) > maxEstimatedOutputTokens;
@@ -3095,6 +3105,7 @@ export const TRANSLATION_OUTPUT_CONTRACT_MATERIAL: TranslationOutputContractMate
       // Only model-facing protection and schema assembly. Host restore and
       // post-validation helpers are not generation identity.
       protectRequestText,
+      sourceTextTokens,
       protectedAssemblySourceParts,
       protectedAssemblyPartMaximumLengths,
       protectedAssemblyRequiredPartPatterns,

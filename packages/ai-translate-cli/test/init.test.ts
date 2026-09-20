@@ -244,3 +244,54 @@ describe("runInit", () => {
     expect((await runInit(root)).lines.join("\n")).toContain("! No i18n/routing.ts found");
   });
 });
+
+describe("native project initialization", () => {
+  it("prefers a usable web layout over native project markers with invalid resources", async () => {
+    const root = await seedProject({
+      ...nextIntlProject(),
+      "App.xcodeproj/project.pbxproj": "developmentRegion = en; knownRegions = (en,fr);",
+      "Localizable.xcstrings": '{"sourceLanguage":"en","version":"2.0","strings":{}}',
+    });
+    const result = await runInit(root, { preview: true });
+    expect(result.setup.integrationId).toBe("next-intl");
+    expect(result.lines.join("\n")).toContain("Also detected, not used: Apple localization");
+    const native = await runInit(root, { integration: "apple", preview: true });
+    expect(native.lines.join("\n")).toContain('"include": []');
+    expect(native.lines.join("\n")).toContain("Localizable.xcstrings");
+    expect(await configExists(root)).toBe(false);
+  });
+
+  it("previews a Swift project before resources exist without inventing languages", async () => {
+    const root = await seedProject({
+      "Newsblocker.xcodeproj/project.pbxproj": 'developmentRegion = en; knownRegions = (en, Base);',
+      "Shared/Views/Settings.swift": 'Text("Settings")',
+    });
+    const result = await runInit(root, { preview: true });
+    expect(result.setup.integrationId).toBe("apple");
+    expect(result.setup.plan.targetLocales).toEqual([]);
+    expect(result.lines.join("\n")).toContain("Create and populate an Xcode String Catalog");
+    expect(result.lines.join("\n")).toContain("const targetLocales = [];");
+    expect(await configExists(root)).toBe(false);
+  });
+
+  it("writes one composable config for native catalog and strings roots", async () => {
+    const root = await seedProject({
+      "App/Localizable.xcstrings": JSON.stringify({ sourceLanguage: "en", strings: { Hello: { localizations: { fr: { stringUnit: { state: "translated", value: "Bonjour" } } } } }, version: "1.0" }),
+      "Package/Resources/Localizable.xcstrings": JSON.stringify({ sourceLanguage: "en", strings: {}, version: "1.0" }),
+      "App/en.lproj/InfoPlist.strings": '"name" = "App";',
+      "App/fr.lproj/InfoPlist.strings": '"name" = "App";',
+    });
+    const result = await runInit(root, { integration: "apple" });
+    const written = await fs.readFile(path.join(root, "ai-translate.config.ts"), "utf8");
+    expect(written).toContain("createAppleStringCatalog({");
+    expect(written).toContain("createAppleStringsCatalog({");
+    expect(written).toContain('"include": ["App/Localizable.xcstrings","Package/Resources/Localizable.xcstrings"],');
+    expect(result.lines.join("\n")).toContain("Install: @ai-translate/cli @ai-translate/fs-json @ai-translate/apple @ai-translate/provider-openai");
+  });
+
+  it("explains the required externalization for Expo and Tauri without resources", async () => {
+    const root = await seedProject({ "package.json": '{"dependencies":{"expo":"55"}}', "src/App.tsx": '<Text>Hello</Text>', "src-tauri/tauri.conf.json": '{}' });
+    await expect(runInit(root)).rejects.toThrow(/first externalize strings into localization resources/u);
+    expect(await configExists(root)).toBe(false);
+  });
+});

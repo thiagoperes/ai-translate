@@ -867,12 +867,11 @@ async function collectCandidates(
       if (!sourceDocument) {
         throw new Error(`Missing source document at ${sourceRef.path}.`);
       }
-      const sourceEntries = mapEntriesByPointer(
-        sourceDocument,
-        addressToJsonPointer
-      );
-
       for (const locale of resolveLocales(config, options)) {
+        const localizedSource = catalog.localizeSourceDocument === undefined
+          ? sourceDocument
+          : await catalog.localizeSourceDocument({ locale, source: sourceDocument });
+        const sourceEntries = mapEntriesByPointer(localizedSource, addressToJsonPointer);
         const targetRef = catalog.createDocumentRef(sourceRef, locale);
         const targetDocument = await catalog.loadDocument(targetRef);
         if (!targetDocument) {

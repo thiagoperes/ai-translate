@@ -32,6 +32,7 @@ function cloneEntry(entry: Entry): Entry {
   return {
     ...entry,
     address: entry.address.map((segment) => ({ ...segment })),
+    ...(entry.context === undefined ? {} : { context: structuredClone(entry.context) }),
     ...(entry.meta === undefined ? {} : { meta: { ...entry.meta } }),
     ...(entry.tokens === undefined ? {} : { tokens: entry.tokens.map((token) => ({ ...token })) }),
   };
@@ -167,6 +168,18 @@ class StagedCatalogs {
     }
   }
 
+  async verifyOriginals(): Promise<void> {
+    await Promise.all([...this.files.values()].map(async (staged) => {
+      const current = await readOriginal(staged.realPath);
+      const sameBytes = current.original === null
+        ? staged.original === null
+        : staged.original !== null && current.original.equals(staged.original);
+      if (!sameBytes || current.mode !== staged.mode) {
+        throw new Error(`Localization file changed during translation: ${staged.realPath}. No staged changes were committed; rerun with the updated file.`);
+      }
+    }));
+  }
+
   async durableChanges(): Promise<readonly DurableDocumentChange[]> {
     return  Promise.all(
       [...this.files.values()].map(async (staged) => ({
@@ -272,7 +285,14 @@ class StagedCatalogs {
     const mergeStagedState = catalog.mergeStagedState?.bind(catalog);
     return {
       createDocumentRef: (sourceRef, locale) => catalog.createDocumentRef(sourceRef, locale),
+      ...(catalog.createScaffoldDocument === undefined
+        ? {}
+        : { createScaffoldDocument: catalog.createScaffoldDocument.bind(catalog) }),
       id: catalog.id,
+      ...(catalog.messageFormats === undefined ? {} : { messageFormats: catalog.messageFormats }),
+      ...(catalog.localizeSourceDocument === undefined
+        ? {}
+        : { localizeSourceDocument: catalog.localizeSourceDocument.bind(catalog) }),
       listDocumentRefs: (sourceLocale) => catalog.listDocumentRefs(sourceLocale),
       loadDocument: (ref) => this.loadStaged(catalog, ref),
       ...(mergeStagedState === undefined ? {} : { mergeStagedState }),
@@ -329,9 +349,17 @@ class StagedCatalogs {
         skippedDocuments += 1;
         continue;
       }
-      await adapter.writeDocument(
-        await adapter.reconcileDocument({ ref: targetRef, source, target: null }),
-      );
+      const localizedSource = adapter.createScaffoldDocument !== undefined || adapter.localizeSourceDocument === undefined
+        ? source
+        : await adapter.localizeSourceDocument({ locale: options.locale, source });
+      const scaffold = adapter.createScaffoldDocument === undefined
+        ? await adapter.reconcileDocument({ ref: targetRef, source: localizedSource, target: null })
+        : await adapter.createScaffoldDocument({ ref: targetRef, source: localizedSource, strategy });
+      if (scaffold === null) {
+        skippedDocuments += 1;
+        continue;
+      }
+      await adapter.writeDocument(scaffold);
       createdDocuments += 1;
     }
 
@@ -411,6 +439,10 @@ export async function runStagedCatalogTransaction<T>(
         return result;
       }
 
+      // A shared resource can contain source strings and unrelated locales.
+      // Check every file before either commit path starts. A conflict must not
+      // enter rollback: restoring the old snapshot would erase the new edits.
+      await stagedCatalogs.verifyOriginals();
       const durableStore = durableStateStore(config.state);
       if (durableStore !== null) {
         const documents = await stagedCatalogs.durableChanges();

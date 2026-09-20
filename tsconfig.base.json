@@ -23,6 +23,10 @@
     "sourceMap": true,
     "strict": true,
     "paths": {
+      "@ai-translate/apple": ["./packages/ai-translate-apple/src/index.ts"],
+      "@ai-translate/apple/*": ["./packages/ai-translate-apple/src/*"],
+      "@ai-translate/integrations": ["./packages/ai-translate-integrations/src/index.ts"],
+      "@ai-translate/integrations/*": ["./packages/ai-translate-integrations/src/*"],
       "@ai-translate/cli": ["./packages/ai-translate-cli/src/index.ts"],
       "@ai-translate/cli/*": ["./packages/ai-translate-cli/src/*"],
       "@ai-translate/core": ["./packages/ai-translate-core/src/index.ts"],

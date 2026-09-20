@@ -189,6 +189,9 @@ export async function adoptExistingTranslations(
       }
 
       for (const locale of options.targetLocales) {
+        const localizedSource = catalog.localizeSourceDocument === undefined
+          ? sourceDocument
+          : await catalog.localizeSourceDocument({ locale, source: sourceDocument });
         const targetRef = catalog.createDocumentRef(sourceRef, locale);
         const targetDocument = await catalog.loadDocument(targetRef);
         const targetEntries = new Map(
@@ -198,7 +201,7 @@ export async function adoptExistingTranslations(
           ]),
         );
 
-        for (const sourceEntry of sourceDocument.entries) {
+        for (const sourceEntry of localizedSource.entries) {
           if (typeof sourceEntry.value !== "string") {
             continue;
           }

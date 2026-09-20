@@ -3,6 +3,7 @@ import type {
   TranslationRequest,
   TranslationResponse,
 } from "@ai-translate/core/types";
+import { icuMessageFormat } from "@ai-translate/message-formats";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as z from "zod";
 
@@ -2564,6 +2565,57 @@ describe("TestTranslationProvider", () => {
       ),
     ).toContain("[^0-9\\\\s]");
     expect(request.messages[0]?.content).not.toContain("Rally");
+  });
+
+  it("protects adapter-supplied native placeholders before numeric processing", async () => {
+    const { transport, parse } = createMockTransport(() => ({
+      choices: [{ message: { parsed: { translations: {
+        native: { translationParts: { part_0: "", part_1: " teilte ", part_2: " Dokumente" } },
+      } } } }],
+    }));
+    const provider = new TestTranslationProvider({ transport }) as unknown as ExposedProvider;
+    const request = createRequest("native", "%@ shared %lld documents", {
+      tokens: [
+        { type: "placeholder", name: "1", raw: "%@", syntax: "printf" },
+        { type: "text", raw: " shared " },
+        { type: "placeholder", name: "2", raw: "%lld", syntax: "printf" },
+        { type: "text", raw: " documents" },
+      ],
+    });
+    await expect(provider.translateBatch({ batch: [request], locale: "de" })).resolves.toEqual([
+      { key: "native", translation: "%@ teilte %lld Dokumente" },
+    ]);
+    const sent = parse.mock.calls[0]?.[0] as unknown as { messages: { content: string }[] };
+    const payload = JSON.parse(sent.messages[1]?.content ?? "{}") as {
+      requests: { text: string; protectedAssembly: { slots: string[] } }[];
+    };
+    expect(payload.requests[0]?.text).not.toContain("%lld");
+    expect(payload.requests[0]?.protectedAssembly.slots).toHaveLength(2);
+  });
+
+  it.each([
+    ["Plan: {count, plural, one {Solo} other {Team}}", "Tarif: {count, plural, one {Solo} other {Team}}", "Plan: {count, plural, one {{AI_TRANSLATE_STRUCTURE_0}} other {{AI_TRANSLATE_STRUCTURE_1}}}"],
+    ["Plan: {plan, select, solo {Solo} other {Team}}", "Tarif: {plan, select, solo {Solo} other {Team}}", "Plan: {plan, select, solo {{AI_TRANSLATE_STRUCTURE_0}} other {{AI_TRANSLATE_STRUCTURE_1}}}"],
+    ["Total {amount, number}", "Summe {amount, number}", "Total {{AI_TRANSLATE_STRUCTURE_0}}"],
+    ["On {when, date, short}", "Am {when, date, short}", "On {{AI_TRANSLATE_STRUCTURE_0}}"],
+    ["It''s ready", "Es ist bereit", "It''s ready"],
+  ])("preserves historical provider behavior for structural ICU tokens: %s", async (sourceText, targetText, protectedText) => {
+    const { transport, parse } = createMockTransport(() => ({
+      choices: [{ message: { parsed: { translations: {
+        icu: { translation: targetText },
+      } } } }],
+    }));
+    const provider = new TestTranslationProvider({ transport }) as unknown as ExposedProvider;
+    const tokens = icuMessageFormat.tokenize(sourceText);
+    expect(tokens.map(({ raw }) => raw).join("")).not.toBe(sourceText);
+    const result = await provider.translateBatch({
+      batch: [createRequest("icu", sourceText, { tokens })], locale: "de",
+    });
+    expect(result).toEqual([{ key: "icu", translation: targetText }]);
+    const sent = parse.mock.calls[0]?.[0] as unknown as { messages: { content: string }[] };
+    const payload = JSON.parse(sent.messages[1]?.content ?? "{}") as { requests: { text: string }[] };
+    expect(payload.requests[0]?.text).toBe(protectedText);
+    expect(icuMessageFormat.validateParity({ sourceText, targetText, sourceLocale: "en", locale: "de" })).toEqual([]);
   });
 
   it("turns shared preserve constraints into host-owned slots", async () => {

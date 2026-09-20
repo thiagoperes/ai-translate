@@ -396,7 +396,7 @@ function printHelp(): void {
   console.log(`ai-translate
 
 Usage:
-  ai-translate init [--integration <next-intl|i18next>] [--provider <openai|ai-sdk>] [--provider-package <@ai-sdk/...>] [--model <id>] [--preview] [--force]
+  ai-translate init [--integration <id>] [--provider <openai|ai-sdk>] [--provider-package <@ai-sdk/...>] [--model <id>] [--preview] [--force]
   ai-translate validate [--config <path>]
   ai-translate check [--config <path>] [--locale <locale>] [--catalog <id>] [--unit <id>] [--include-path <json-pointer>] [--max-pending-translations <count>]
   ai-translate audit [--check] [--refresh] [--config <path>] [--locale <locale>] [--catalog <id>] [--unit <id>] [--include-path <json-pointer>]

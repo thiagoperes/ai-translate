@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import assert from "node:assert/strict";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -91,6 +92,8 @@ async function verifyConsumer(consumerDir) {
       "-e",
       [
         "await Promise.all([",
+        "  import('@ai-translate/apple'),",
+        "  import('@ai-translate/integrations'),",
         "  import('@ai-translate/core'),",
         "  import('@ai-translate/core/address'),",
         "  import('@ai-translate/core/acceptance'),",
@@ -129,6 +132,40 @@ async function verifyConsumer(consumerDir) {
   });
 }
 
+/** Exercise detection, generated TypeScript, installed imports, and real adapter
+ * discovery together. Dry runs never ask the configured transport to translate. */
+async function verifyDetectedConfigs(consumerDir) {
+  const nativeFiles = {
+    "App.xcodeproj/project.pbxproj": "developmentRegion = en; knownRegions = (en, Base, fr);",
+    "App[AB]/Localizable.xcstrings": JSON.stringify({ sourceLanguage: "en", version: "1.0", strings: { Hello: {} } }),
+    "Resources/Base.lproj/Localizable.strings": '"greeting" = "Hello %@";',
+    "Resources/en.lproj/InfoPlist.strings": '"name" = "Camera permission";',
+  };
+  const webFiles = {
+    "package.json": JSON.stringify({ dependencies: { "next-intl": "1" } }),
+    "messages/en/placeholder.txt": "An empty higher-priority layout must not hide JSON files.",
+    "messages/en.json": JSON.stringify({ hello: "Hello" }),
+    "i18n/routing.mts": 'throw new Error("Detection must never execute project modules");\n// defaultLocale: "de"\nexport const routing = { locales: ["en", "fr"], defaultLocale: "en" };',
+  };
+  for (const { name, files, pending } of [
+    { name: "native-shape", files: nativeFiles, pending: 3 },
+    { name: "web-shape", files: webFiles, pending: 1 },
+  ]) {
+    const cwd = path.join(consumerDir, name);
+    for (const [file, contents] of Object.entries(files)) {
+      await mkdir(path.dirname(path.join(cwd, file)), { recursive: true });
+      await writeFile(path.join(cwd, file), contents);
+    }
+    const options = { cwd, env: { OPENAI_API_KEY: "package-smoke-no-network" } };
+    await execa("pnpm", ["exec", "ai-translate", "init"], options);
+    const result = await execa("pnpm", ["exec", "ai-translate", "sync", "--dry-run"], options);
+    assert.match(result.stdout, new RegExp(`"translatedEntries":\\s*${String(pending)}\\b`, "u"));
+    for (const [file, contents] of Object.entries(files)) {
+      assert.equal(await readFile(path.join(cwd, file), "utf8"), contents);
+    }
+  }
+}
+
 const tempRoot = await mkdtemp(path.join(os.tmpdir(), "ai-translate-pack-"));
 
 try {
@@ -137,6 +174,7 @@ try {
   const consumerDir = path.join(tempRoot, "consumer");
   await installTarballs(packages, consumerDir);
   await verifyConsumer(consumerDir);
+  await verifyDetectedConfigs(consumerDir);
 } finally {
   await rm(tempRoot, { force: true, recursive: true });
 }

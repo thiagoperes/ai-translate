@@ -34,6 +34,33 @@ Parity is checked structurally rather than textually:
 
 That last point is what makes ICU work across locales. English `{count, plural, one {…} other {…}}` translated into Polish is *expected* to gain `few` and `many`; a Polish translation that keeps only two branches is the error, and a Japanese translation that keeps only `other` is correct.
 
+## Apple printf
+
+`applePrintfMessageFormat` protects and validates native format arguments:
+`%@`, integer/float conversions (including length modifiers, width and
+precision), positional arguments, `%%`, catalog substitution references, and
+the `%arg` placeholder inside Xcode substitution branches.
+
+```ts
+import { applePrintfMessageFormat } from "@ai-translate/message-formats";
+import { createLocalizedJsonDocument } from "@ai-translate/fs-json";
+
+createLocalizedJsonDocument({
+  id: "expo-native",
+  rootDir: "locales/native",
+  sourceLocale: "en",
+  unitId: "permissions",
+  messageFormat: applePrintfMessageFormat,
+});
+```
+
+Apple resource adapters register this format automatically. Use it explicitly
+for Expo locale JSON or another storage format containing Apple messages. The
+validator checks argument types, positions, multiplicity, format specifications,
+and dynamic width/precision arguments. It accepts safe positional reordering;
+the default provider's protected assembly retains source slot order. Invalid
+formats fail validation. This format does not interpret ICU or i18next plurals.
+
 ## i18next
 
 For `i18next`, `react-i18next`, and `next-i18next`.

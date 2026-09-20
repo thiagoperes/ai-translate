@@ -1,6 +1,6 @@
 {
   "name": "@ai-translate/provider-core",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Vendor-neutral translation and semantic-audit engine for ai-translate: prompting, batching, structured output, validation and repair over a pluggable model transport.",
   "keywords": [
     "i18n",
@@ -53,6 +53,9 @@
   "dependencies": {
     "@ai-translate/core": "workspace:*",
     "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@ai-translate/message-formats": "workspace:*"
   },
   "engines": {
     "node": ">=20.19.0"

@@ -63,14 +63,38 @@ importers:
         specifier: 4.1.11
         version: 4.1.11(@types/node@26.6.1)(@vitest/coverage-v8@4.1.11)(vite@8.2.0(@types/node@26.6.1)(jiti@2.7.0))
 
+  packages/ai-translate-apple:
+    dependencies:
+      '@ai-translate/core':
+        specifier: workspace:*
+        version: link:../ai-translate-core
+      '@ai-translate/integrations':
+        specifier: workspace:*
+        version: link:../ai-translate-integrations
+      '@ai-translate/message-formats':
+        specifier: workspace:*
+        version: link:../ai-translate-message-formats
+      globby:
+        specifier: 16.2.4
+        version: 16.2.4
+      ignore:
+        specifier: 7.0.5
+        version: 7.0.5
+
   packages/ai-translate-cli:
     dependencies:
+      '@ai-translate/apple':
+        specifier: workspace:*
+        version: link:../ai-translate-apple
       '@ai-translate/core':
         specifier: workspace:*
         version: link:../ai-translate-core
       '@ai-translate/fs-json':
         specifier: workspace:*
         version: link:../ai-translate-fs-json
+      '@ai-translate/integrations':
+        specifier: workspace:*
+        version: link:../ai-translate-integrations
       '@ai-translate/next':
         specifier: workspace:*
         version: link:../ai-translate-next
@@ -80,6 +104,10 @@ importers:
       jiti:
         specifier: 2.7.0
         version: 2.7.0
+    devDependencies:
+      '@ai-translate/message-formats':
+        specifier: workspace:*
+        version: link:../ai-translate-message-formats
 
   packages/ai-translate-core: {}
 
@@ -108,6 +136,8 @@ importers:
         specifier: 9.0.4
         version: 9.0.4
 
+  packages/ai-translate-integrations: {}
+
   packages/ai-translate-keystatic: {}
 
   packages/ai-translate-markdoc:
@@ -134,7 +164,11 @@ importers:
         specifier: 3.5.19
         version: 3.5.19
 
-  packages/ai-translate-next: {}
+  packages/ai-translate-next:
+    dependencies:
+      '@ai-translate/integrations':
+        specifier: workspace:*
+        version: link:../ai-translate-integrations
 
   packages/ai-translate-provider-ai-sdk:
     dependencies:
@@ -160,6 +194,10 @@ importers:
       zod:
         specifier: 4.6.5
         version: 4.6.5
+    devDependencies:
+      '@ai-translate/message-formats':
+        specifier: workspace:*
+        version: link:../ai-translate-message-formats
 
   packages/ai-translate-provider-openai:
     dependencies:
@@ -1295,8 +1333,8 @@ packages:
     resolution: {integrity: sha512-hsBTNUqQTDwkWtcdYI2i06Y/nUBEsNEDJKjWdigLvegy8kDuJAS8uRlpkkcQpyEXL0Z/pjDy5HBmMjRCJ2gq+g==}
     engines: {node: '>= 4'}
 
-  ignore@7.0.9:
-    resolution: {integrity: sha512-brTTsvFRt5C1gGHtPst/281UjPD5t9fBqbgoMPlVWy11ZLTPfu7HxK4ZYqO9H7o/yC9rSTCI85EaQ4OoY12qYw==}
+  ignore@7.0.5:
+    resolution: {integrity: sha512-Hs59xBNfUIunMFgWAbGX5cq6893IbWg4KnrjbYwX3tx0ztorVgTDA6B2sxf8ejHJ4wz8BqGUMYlnzNBer5NvGg==}
     engines: {node: '>= 4'}
 
   import-without-cache@0.4.1:
@@ -2975,7 +3013,7 @@ snapshots:
     dependencies:
       '@sindresorhus/merge-streams': 4.0.0
       fast-glob: 3.3.3
-      ignore: 7.0.9
+      ignore: 7.0.5
       is-path-inside: 4.0.0
       micromatch: 4.0.8
       slash: 5.1.0
@@ -3010,7 +3048,7 @@ snapshots:
 
   ignore@5.3.2: {}
 
-  ignore@7.0.9: {}
+  ignore@7.0.5: {}
 
   import-without-cache@0.4.1: {}
 

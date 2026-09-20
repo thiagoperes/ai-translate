@@ -1,6 +1,6 @@
 {
   "name": "@ai-translate/cli",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Command-line interface for ai-translate: validate, check, audit, and sync localized content generated from a single source locale.",
   "keywords": [
     "i18n",
@@ -53,11 +53,16 @@
     "test:pack": "publint . && attw --pack . --profile esm-only"
   },
   "dependencies": {
+    "@ai-translate/apple": "workspace:*",
     "@ai-translate/core": "workspace:*",
     "@ai-translate/fs-json": "workspace:*",
+    "@ai-translate/integrations": "workspace:*",
     "@ai-translate/next": "workspace:*",
     "dotenv": "17.4.2",
     "jiti": "2.7.0"
+  },
+  "devDependencies": {
+    "@ai-translate/message-formats": "workspace:*"
   },
   "engines": {
     "node": ">=20.19.0"

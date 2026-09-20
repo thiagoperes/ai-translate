@@ -304,15 +304,17 @@ describe("validateCatalogs with plural expansion", () => {
     expect(await structuralCodes(rootDir, ["pl"])).toEqual([]);
   });
 
-  it("accepts a locale carrying fewer plural forms than it grammatically needs", async () => {
-    // A project adopting the toolkit has files that predate expansion. They
-    // must validate as structurally sound before the first sync reshapes them.
+  it("reports required target forms missing from a legacy plural family", async () => {
+    // The family still has a compatible structure, but validation now uses the
+    // same localized source as sync and identifies the two pending Polish arms.
     const rootDir = await seed({
       "locales/en/inventory.json": EN_NAMESPACE,
       "locales/pl/inventory.json": { items_one: "x", items_other: "y", title: "Inwentarz" },
     });
 
-    expect(await structuralCodes(rootDir, ["pl"])).toEqual([]);
+    expect(await structuralCodes(rootDir, ["pl"])).toEqual([
+      "missing-target-entry", "missing-target-entry",
+    ]);
   });
 
   it("still reports a target that is genuinely missing a key", async () => {
