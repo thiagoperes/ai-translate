@@ -53,11 +53,16 @@
     "test:pack": "publint . && attw --pack . --profile esm-only"
   },
   "dependencies": {
+    "@ai-translate/apple": "workspace:*",
     "@ai-translate/core": "workspace:*",
     "@ai-translate/fs-json": "workspace:*",
+    "@ai-translate/integrations": "workspace:*",
     "@ai-translate/next": "workspace:*",
     "dotenv": "17.4.2",
     "jiti": "2.7.0"
+  },
+  "devDependencies": {
+    "@ai-translate/message-formats": "workspace:*"
   },
   "engines": {
     "node": ">=20.19.0"

@@ -388,10 +388,16 @@ function acceptsLegacyContentRoleDigest(
 
 function getCompatibleContextDigests(args: {
   baseContext: TranslationContext | undefined;
+  entryContext: TranslationContext | undefined;
   config: AiTranslateConfig;
   contentRole: TranslationContentRole | undefined;
   requestContextRevision: string | undefined;
 }): string[] {
+  // Source-authored context did not exist in legacy digests. Treating a newly
+  // added translator note as compatible would silently ignore its instructions.
+  if (args.entryContext !== undefined) {
+    return [];
+  }
   const revisionIsCompatible =
     args.requestContextRevision === undefined ||
     args.config.requestContextLegacyRevisions?.includes(
@@ -1129,6 +1135,14 @@ function shouldTranslateEntry(args: {
       staleManual: false,
       translate: true,
     };
+  }
+
+  // A source update does not erase evidence of a concurrent human correction.
+  // Preserve that correction and surface the stale source for review, just as
+  // if the manual edit had been recorded in a preceding sync.
+  if (sourceChanged && targetChanged && manualOriginPolicy === "preserve" &&
+    isNonEmptyDifferentTranslation(sourceText, targetText)) {
+    return { baselineOrigin: "manual", staleManual: true, translate: false };
   }
 
   if (
@@ -2188,6 +2202,7 @@ async function prepareTask(args: {
     const translationDecision = shouldTranslateEntry({
       compatibleContextDigests: getCompatibleContextDigests({
         baseContext,
+        entryContext: sourceEntry.context,
         config,
         contentRole,
         requestContextRevision,
@@ -3726,12 +3741,11 @@ export async function validateCatalogs(
             ))
       );
 
-      const sourceEntries = mapEntriesByPointer(
-        sourceDocument,
-        addressToJsonPointer
-      );
-
       for (const locale of targetLocales) {
+        const localizedSource = catalog.localizeSourceDocument === undefined
+          ? sourceDocument
+          : await catalog.localizeSourceDocument({ locale, source: sourceDocument });
+        const sourceEntries = mapEntriesByPointer(localizedSource, addressToJsonPointer);
         const targetRef = catalog.createDocumentRef(sourceRef, locale);
         const targetDocument = await catalog.loadDocument(targetRef);
         if (targetDocument === null) {
@@ -3777,7 +3791,7 @@ export async function validateCatalogs(
           excludedSourcePointers
         );
         const rawStructuresMatch =
-          sourceDocument.structureDigest === targetDocument.structureDigest;
+          localizedSource.structureDigest === targetDocument.structureDigest;
         // A locale may intentionally omit excluded leaves, so its adapter-level
         // digest can differ even though every active entry keeps the same shape.
         if (
@@ -4174,6 +4188,7 @@ export async function validateCatalogs(
               contextDigest &&
             !getCompatibleContextDigests({
               baseContext,
+              entryContext: sourceEntry.context,
               config,
               contentRole,
               requestContextRevision,

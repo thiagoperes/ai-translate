@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { validateTranslationConstraints } from "./constraints";
 import { digestValue } from "./hash";
 import { resolveConfigMessageFormat } from "./message-format";
-import { normalizeTranslationContext } from "./policies";
+import { mergeTranslationContexts, normalizeTranslationContext } from "./policies";
 import { tokenizeText } from "./tokens";
 import { LEGACY_UNVERIFIED_GENERATION_REVISION } from "./types";
 import type {
@@ -154,12 +154,13 @@ export function resolveRequestContext(args: {
   path: string;
   unitId: string;
 }): { context: TranslationContext | undefined; revision: string | undefined } {
+  const context = mergeTranslationContexts(args.baseContext, args.entry.context);
   const resolverArgs = {
     catalogId: args.catalogId,
     ...(args.contentRole === undefined
       ? {}
       : { contentRole: args.contentRole }),
-    ...(args.baseContext === undefined ? {} : { context: args.baseContext }),
+    ...(context === undefined ? {} : { context }),
     entry: args.entry,
     locale: args.locale,
     path: args.path,
@@ -168,7 +169,7 @@ export function resolveRequestContext(args: {
   return {
     context: args.config.requestContext
       ? args.config.requestContext(resolverArgs)
-      : args.baseContext,
+      : context,
     revision: args.config.requestContextRevision?.(resolverArgs),
   };
 }
@@ -292,6 +293,7 @@ async function collectUncachedRawTranslationIssues(
     args.entry.messageFormatId
   ).validateParity({
     locale: args.locale,
+    sourceEntry: args.entry,
     sourceLocale: args.config.sourceLocale,
     sourceText: args.sourceText,
     targetText: args.targetText,

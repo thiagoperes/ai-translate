@@ -1,14 +1,16 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
-import { detectProject, renderConfig } from "@ai-translate/next";
-import type { DetectedSetup, Integration, ProviderChoice } from "@ai-translate/next";
+import { appleIntegration } from "@ai-translate/apple";
+import { detectProject, renderConfig, requiredConfigPackages } from "@ai-translate/integrations";
+import type { DetectedSetup, Integration, ProviderChoice } from "@ai-translate/integrations";
+import { builtinIntegrations as nextIntegrations } from "@ai-translate/next";
 
 const CONFIG_FILENAME = "ai-translate.config.ts";
 const DEFAULT_AI_SDK_PACKAGE = "@ai-sdk/openai";
 
-/** Packages a generated config imports from, whichever provider it wires up. */
-const REQUIRED_PACKAGES = ["@ai-translate/cli", "@ai-translate/fs-json"];
+/** Platforms compose independent detectors; the runner has no platform dependencies. */
+export const builtinInitIntegrations: readonly Integration[] = [...nextIntegrations, appleIntegration];
 
 export interface InitOptions {
   /** Overwrites an existing config instead of refusing. */
@@ -50,13 +52,7 @@ async function missingPackages(
   plan: DetectedSetup["plan"],
   options: InitOptions,
 ): Promise<string[]> {
-  const expected = [
-    ...REQUIRED_PACKAGES,
-    ...(plan.messageFormat === "plain" ? [] : ["@ai-translate/message-formats"]),
-    ...(options.provider === "ai-sdk"
-      ? ["@ai-translate/provider-ai-sdk", "ai", options.providerPackage ?? DEFAULT_AI_SDK_PACKAGE]
-      : ["@ai-translate/provider-openai"]),
-  ];
+  const expected = requiredConfigPackages(plan, options);
 
   try {
     const raw = await fs.readFile(path.join(cwd, "package.json"), "utf8");
@@ -67,7 +63,7 @@ async function missingPackages(
     ]);
     return expected.filter((name) => !declared.has(name));
   } catch {
-    return expected;
+    return [...expected];
   }
 }
 
@@ -90,9 +86,10 @@ function chooseSetup(
   const [best, ...rest] = setups;
   if (best === undefined) {
     throw new Error(
-      "No supported Next.js localization setup was found. ai-translate init currently " +
-        "recognises next-intl and i18next. Write ai-translate.config.ts by hand, or run " +
-        "init from the directory holding package.json and your locale files.",
+      "No supported localization setup was found. ai-translate init recognises " +
+        "next-intl and i18next, Apple String Catalogs, localized .strings tables, and Xcode or Apple Swift package projects. " +
+        "For Expo, React Native, or Tauri apps with hardcoded text, first externalize strings into localization resources; " +
+        "init does not extract text from application code. Run init from the project root, or write ai-translate.config.ts by hand.",
     );
   }
   if (rest.length > 0 && rest[0]?.confidence === best.confidence) {
@@ -112,13 +109,13 @@ function chooseSetup(
  * Detects the project's localization setup and writes a config for it.
  *
  * Nothing else is touched. Installing packages, wiring scripts, and editing the
- * Next.js config stay in the user's hands, so `init` on an unfamiliar repository
+ * application configuration stay in the user's hands, so `init` on an unfamiliar repository
  * produces exactly one new file and a list of instructions.
  */
 export async function runInit(cwd: string, options: InitOptions = {}): Promise<InitResult> {
   const setups = await detectProject(
     cwd,
-    options.integrations === undefined ? {} : { integrations: options.integrations },
+    { integrations: options.integrations ?? builtinInitIntegrations },
   );
   const setup = chooseSetup(setups, options.integration);
   const contents = renderConfig(setup.plan, {

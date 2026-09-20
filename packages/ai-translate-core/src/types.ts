@@ -4,7 +4,8 @@ export type Policy = "translate" | "copy" | "exclude";
 
 export type EntryStorage = "string" | "scalar" | "html" | "markdoc";
 
-export type DocumentFormat = "json" | "html" | "markdoc";
+/** Adapter-owned format identifier. Core does not parse document storage. */
+export type DocumentFormat = string;
 
 export type JsonPrimitive = boolean | number | string | null;
 export interface JsonObject {
@@ -49,7 +50,7 @@ export interface TextToken {
 export interface PlaceholderToken {
   name: string;
   raw: string;
-  syntax: "double-brace" | "single-brace";
+  syntax: "double-brace" | "single-brace" | "printf";
   type: "placeholder";
 }
 
@@ -93,6 +94,9 @@ export type Token =
 
 export interface Entry {
   address: readonly AddressSegment[];
+  /** Source-authored translator context, such as a catalog comment or plural
+   * category. Merged with configured context before the requestContext hook. */
+  context?: TranslationContext;
   /** Names the {@link MessageFormat} that interprets `value`. Omitting it means
    * the plain format, so entries written before formats existed keep validating
    * exactly as before. An id rather than the object itself, because entries are
@@ -171,6 +175,14 @@ export interface CatalogAdapter {
    * self-registering and the user never lists it twice. */
   readonly messageFormats?: readonly MessageFormat[];
   createDocumentRef(sourceRef: DocumentRef, locale: string): DocumentRef;
+  /** Prepares a locale seed without writing it. The CLI uses this inside its
+   * transaction when a format distinguishes scaffolded text from translations.
+   * Return null when there is nothing to scaffold in the resource. */
+  createScaffoldDocument?(args: {
+    ref: DocumentRef;
+    source: LoadedDocument;
+    strategy: CatalogScaffoldStrategy;
+  }): Promise<LoadedDocument | null>;
   listDocumentRefs(sourceLocale: string): Promise<readonly DocumentRef[]>;
   loadDocument(ref: DocumentRef): Promise<LoadedDocument | null>;
   /**
@@ -181,8 +193,9 @@ export interface CatalogAdapter {
    * correct only while the set of translatable units is locale-independent.
    * Suffix-keyed plurals break that: English states two forms and Polish needs
    * four, and the two extra units have to exist on the source side or they
-   * will never be translated. Implementations must be pure and must keep every
-   * pointer the authored source already had.
+   * will never be translated. Implementations must be pure and preserve the
+   * authored source's meaning. Addresses may change when a target introduces
+   * native variants, but every target leaf must have a source-derived value.
    */
   localizeSourceDocument?(args: LocalizeSourceDocumentArgs): Promise<LoadedDocument>;
   /** Combine a reconciled document with the partially written state of a

@@ -2,6 +2,7 @@ import { tokenizeText, validateTokenParity } from "./tokens";
 import type {
   AiTranslateConfig,
   CatalogAdapter,
+  Entry,
   Token,
   TranslationValidationIssue,
 } from "./types";
@@ -14,6 +15,9 @@ import type {
 export const PLAIN_MESSAGE_FORMAT_ID = "plain";
 
 export interface MessageParityArgs {
+  /** Canonical source metadata for formats whose arguments are bound by the
+   * containing resource, such as Xcode named substitutions. */
+  sourceEntry?: Readonly<Entry>;
   /** The locale of `targetText`. Plural-bearing formats need it to know which
    * CLDR categories the target is required to supply. */
   locale: string;
@@ -37,6 +41,8 @@ export interface MessageFormat {
   /** Stable across releases: it is written into entries and therefore into the
    * validation cache key. Renaming one re-validates every affected entry. */
   readonly id: string;
+  /** Tokens may describe structure. Providers can protect exact source spans
+   * when their raw values concatenate to the original value. */
   tokenize(value: string): readonly Token[];
   validateParity(args: MessageParityArgs): readonly TranslationValidationIssue[];
 }

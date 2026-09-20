@@ -54,6 +54,9 @@
     "@ai-translate/core": "workspace:*",
     "zod": "4.6.5"
   },
+  "devDependencies": {
+    "@ai-translate/message-formats": "workspace:*"
+  },
   "engines": {
     "node": ">=20.19.0"
   }

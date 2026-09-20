@@ -1,5 +1,6 @@
 import { dependencyNames, firstExistingFile } from "../context";
 import {
+  isLocaleTag,
   localesFromNames,
   readStringArrayLiteral,
   readStringLiteral,
@@ -28,6 +29,9 @@ const SETTINGS_PATHS = [
   "next-i18next.config.js",
   "next-i18next.config.mjs",
   "next-i18next.config.ts",
+  "next-i18next.config.cjs",
+  "next-i18next.config.mts",
+  "next-i18next.config.cts",
   "lib/i18n/i18n.settings.ts",
   "src/lib/i18n/i18n.settings.ts",
   "app/i18n/settings.ts",
@@ -36,17 +40,24 @@ const SETTINGS_PATHS = [
   "src/i18n/settings.ts",
 ];
 
-async function detectLocaleRoot(
+async function detectLocaleRoots(
   context: DetectionContext,
-): Promise<{ locales: readonly string[]; rootDir: string } | null> {
+): Promise<readonly { locales: readonly string[]; rootDir: string }[]> {
   const candidates = await Promise.all(
-    LOCALE_DIRS.map(async (rootDir) => ({
-      locales: localesFromNames(await context.listDirectories(rootDir)),
-      rootDir,
-    })),
+    LOCALE_DIRS.map(async (rootDir) => {
+      const directories = localesFromNames(await context.listDirectories(rootDir));
+      const populated = await Promise.all(directories.map(async (locale) => ({
+        locale,
+        count: await countNamespaces(context, rootDir, locale),
+      })));
+      return {
+        locales: populated.filter((locale) => locale.count > 0).map((locale) => locale.locale),
+        rootDir,
+      };
+    }),
   );
 
-  return candidates.find((candidate) => candidate.locales.length > 0) ?? null;
+  return candidates.filter((candidate) => candidate.locales.length > 0);
 }
 
 /** Counts namespace files so the report can state the corpus size, and so a
@@ -68,18 +79,17 @@ export const i18nextIntegration: Integration = defineIntegration({
       return null;
     }
 
-    const localeRoot = await detectLocaleRoot(context);
-    if (localeRoot === null) {
-      return null;
-    }
+    const [localeRoots, settingsPath] = await Promise.all([
+      detectLocaleRoots(context),
+      firstExistingFile(context, SETTINGS_PATHS),
+    ]);
 
     const evidence: DetectionEvidence[] = [
       { detail: `${runtime.join(", ")} declared as dependencies`, source: "package.json" },
     ];
 
-    let locales = localeRoot.locales;
+    let declaredLocales: readonly string[] | null = null;
     let declaredDefault: string | null = null;
-    const settingsPath = await firstExistingFile(context, SETTINGS_PATHS);
     if (settingsPath !== null) {
       const source = (await context.readFile(settingsPath)) ?? "";
       declaredDefault =
@@ -92,34 +102,56 @@ export const i18nextIntegration: Integration = defineIntegration({
       // for the entries that are locales: these arrays routinely carry
       // pseudo-locales like `default`. If filtering leaves nothing, the
       // directories are the better answer.
-      const declaredLocales = declared === null ? [] : localesFromNames(declared);
-      if (declaredLocales.length > 0) {
-        locales = declaredLocales;
+      const validLocales = declared === null ? [] : localesFromNames(declared);
+      if (validLocales.length > 0) {
+        declaredLocales = validLocales;
       }
       evidence.push({ detail: "i18next settings module", source: settingsPath });
     }
 
-    const sourceLocale = resolveSourceLocale(locales, declaredDefault);
+    const resolveSource = (locales: readonly string[]): string | null =>
+      declaredLocales === null && declaredDefault !== null && isLocaleTag(declaredDefault)
+        ? declaredDefault
+        : resolveSourceLocale(locales, declaredDefault);
+    const localeRoot = localeRoots.find((candidate) => {
+      const source = resolveSource(declaredLocales ?? candidate.locales);
+      return source !== null && candidate.locales.includes(source);
+    });
+    if (localeRoot === undefined) {
+      return null;
+    }
+    const locales = declaredLocales ?? localeRoot.locales;
+    const sourceLocale = resolveSource(locales);
     if (sourceLocale === null) {
       return null;
     }
 
     const namespaceCount = await countNamespaces(context, localeRoot.rootDir, sourceLocale);
-    if (namespaceCount === 0) {
-      return null;
-    }
-
     evidence.push({
       detail: `${String(namespaceCount)} namespace file(s) across ${String(locales.length)} locales`,
       source: `${localeRoot.rootDir}/${sourceLocale}`,
     });
 
     const warnings: string[] = [];
+    if (localeRoots.length > 1) {
+      const alternatives = localeRoots.filter((candidate) => candidate !== localeRoot)
+        .map((candidate) => candidate.rootDir);
+      warnings.push(`Selected ${localeRoot.rootDir}; other locale roots also exist: ${alternatives.join(", ")}. Review whether additional catalogs are needed.`);
+    }
     if (settingsPath === null) {
       warnings.push(
         "No i18next settings module was found, so locales were inferred from directory names. " +
           "Check the generated sourceLocale and targetLocales.",
       );
+    } else {
+      if (declaredLocales === null) {
+        warnings.push(`No literal locale list was found in ${settingsPath}; locales were inferred from directory names. Check targetLocales.`);
+      }
+      if (declaredDefault === null) {
+        warnings.push(`No literal default language was found; assuming "${sourceLocale}" is the source.`);
+      } else if (declaredDefault !== sourceLocale) {
+        warnings.push(`Declared default language "${declaredDefault}" is not enabled; assuming "${sourceLocale}" is the source.`);
+      }
     }
 
     return {
