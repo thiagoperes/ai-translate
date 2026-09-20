@@ -19,7 +19,8 @@ export interface ProjectSetupPlan {
   manifestContents: string | undefined;
   originalManifest: string | undefined;
   packages: readonly string[];
-  installCommand: ProjectInstallCommand;
+  installCommands: readonly ProjectInstallCommand[];
+  notices: readonly string[];
 }
 
 export type ProjectInstaller = (
@@ -41,6 +42,43 @@ const SCRIPTS = {
   "translate:check": "ai-translate check",
   "translate:validate": "ai-translate validate",
 };
+const DEPENDENCY_FIELDS = ["dependencies", "devDependencies", "optionalDependencies"] as const;
+type DependencyField = typeof DEPENDENCY_FIELDS[number];
+
+function isFirstPartyPackage(name: string): boolean {
+  return name === "ai-translate" || name.startsWith("@ai-translate/");
+}
+
+/** Registry versions, ranges, and tags are refreshable. Paths, URLs, workspace
+ * protocols, and aliases are intentional user choices and remain untouched. */
+function isRegistryVersion(version: string): boolean {
+  return /^[a-z\d.*+~^<>=| _-]+$/iu.test(version.trim());
+}
+
+function installCommand(
+  manager: PackageManager,
+  packages: readonly string[],
+  cwd: string,
+  isWorkspaceRoot: boolean,
+  field?: DependencyField,
+): ProjectInstallCommand {
+  const adding = packages.length > 0;
+  const saveFlag = field === undefined ? undefined : manager === "npm" || manager === "pnpm"
+    ? { dependencies: "--save-prod", devDependencies: "--save-dev", optionalDependencies: "--save-optional" }[field]
+    : { dependencies: undefined, devDependencies: "--dev", optionalDependencies: "--optional" }[field];
+  return {
+    command: manager,
+    args: [
+      manager === "npm" || !adding ? "install" : "add",
+      ...(saveFlag === undefined ? [] : [saveFlag]),
+      ...(manager === "pnpm" && adding && isWorkspaceRoot ? ["--workspace-root"] : []),
+      ...(manager === "yarn" ? [] : ["--ignore-scripts"]),
+      ...packages,
+    ],
+    cwd,
+    ...(manager === "yarn" ? { env: { YARN_ENABLE_SCRIPTS: "false" } } : {}),
+  };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -318,11 +356,33 @@ export async function planProjectSetup(
     manager = [...detected][0] ?? "npm";
   }
   const declared = new Set(
-    ["dependencies", "devDependencies", "optionalDependencies"].flatMap(
+    DEPENDENCY_FIELDS.flatMap(
       (field) => Object.keys((manifest[field] ?? {}) as Record<string, string>),
     ),
   );
   const missing = [...new Set(packages)].filter((name) => !declared.has(name));
+  const grouped: Record<DependencyField, string[]> = { dependencies: [], devDependencies: [], optionalDependencies: [] };
+  const notices: string[] = [];
+  for (const name of new Set(packages)) {
+    const fields = DEPENDENCY_FIELDS.filter((field) => Object.hasOwn((manifest[field] ?? {}) as Record<string, string>, name));
+    if (!isFirstPartyPackage(name)) {
+      if (fields.length === 0) {grouped.devDependencies.push(name);}
+      continue;
+    }
+    if (fields.length > 1) {
+      throw new Error(`${name} is declared in multiple dependency sections (${fields.join(", ")}). Keep it in one section before running init so its dependency category can be preserved.`);
+    }
+    const field = fields[0] ?? "devDependencies";
+    const version = (manifest[field] as Record<string, string> | undefined)?.[name];
+    if (version !== undefined && !isRegistryVersion(version)) {
+      notices.push(`Kept ${name}'s custom source in ${field}. Init cannot refresh it automatically; ensure it supports the generated configuration.`);
+      continue;
+    }
+    grouped[field].push(`${name}@latest`);
+    if (version !== undefined) {
+      notices.push(`Refresh ${name} to the latest release, keeping it in ${field}.`);
+    }
+  }
   const scripts = {
     ...(manifest.scripts as Record<string, string> | undefined),
   };
@@ -338,51 +398,20 @@ export async function planProjectSetup(
   const manifestContents = changed
     ? `${JSON.stringify({ ...manifest, scripts }, null, indent).replaceAll("\n", newline)}${newline}`
     : undefined;
-  const adding = missing.length > 0;
-  const args =
-    manager === "npm"
-      ? [
-          "install",
-          ...(adding ? ["--save-dev"] : []),
-          "--ignore-scripts",
-          ...missing,
-        ]
-      : manager === "pnpm"
-        ? [
-            adding ? "add" : "install",
-            ...(adding
-              ? [
-                  "--save-dev",
-                  ...(workspace?.root === root ? ["--workspace-root"] : []),
-                ]
-              : []),
-            "--ignore-scripts",
-            ...missing,
-          ]
-        : manager === "bun"
-          ? [
-              adding ? "add" : "install",
-              ...(adding ? ["--dev"] : []),
-              "--ignore-scripts",
-              ...missing,
-            ]
-          : [
-              adding ? "add" : "install",
-              ...(adding ? ["--dev"] : []),
-              ...missing,
-            ];
+  const installCommands = DEPENDENCY_FIELDS.filter((field) => grouped[field].length > 0).map((field) =>
+    installCommand(manager, grouped[field], root, workspace?.root === root, field),
+  );
+  if (installCommands.length === 0) {
+    installCommands.push(installCommand(manager, [], root, workspace?.root === root));
+  }
   return {
     packageManager: manager,
     manifestPath,
     manifestContents,
     originalManifest,
     packages: missing,
-    installCommand: {
-      command: manager,
-      args,
-      cwd: root,
-      ...(manager === "yarn" ? { env: { YARN_ENABLE_SCRIPTS: "false" } } : {}),
-    },
+    installCommands,
+    notices,
   };
 }
 
@@ -481,7 +510,7 @@ export async function applyProjectSetup(
       `${plan.manifestPath} must be a regular file, not a symlink or directory.`,
     );
   }
-  const lines: string[] = [];
+  const lines: string[] = [...plan.notices];
   if (plan.manifestContents !== undefined) {
     await fs.writeFile(plan.manifestPath, plan.manifestContents, {
       encoding: "utf8",
@@ -491,33 +520,27 @@ export async function applyProjectSetup(
       `${plan.originalManifest === undefined ? "Created" : "Updated"} package.json with translation scripts.`,
     );
   }
-  const { command, args, cwd, env } = plan.installCommand;
-  if (options.install === false) {
-    if (command === "yarn") {
-      lines.push(
-        `Install dependencies (Yarn 2+): YARN_ENABLE_SCRIPTS=false yarn ${args.join(" ")}`,
-        `Install dependencies (Yarn 1): yarn ${args.join(" ")} --ignore-scripts${args[0] === "add" ? " --ignore-workspace-root-check" : ""}`,
-      );
-    } else {
-      lines.push(`Install dependencies: ${command} ${args.join(" ")}`);
+  for (const { command, args, cwd, env } of plan.installCommands) {
+    if (options.install === false) {
+      if (command === "yarn") {
+        lines.push(
+          `Install dependencies (Yarn 2+): YARN_ENABLE_SCRIPTS=false yarn ${args.join(" ")}`,
+          `Install dependencies (Yarn 1): yarn ${args.join(" ")} --ignore-scripts${args[0] === "add" ? " --ignore-workspace-root-check" : ""}`,
+        );
+      } else {
+        lines.push(`Install dependencies: ${command} ${args.join(" ")}`);
+      }
+      continue;
     }
-    return lines;
+    try {
+      await (options.installer ?? installProject)(command, args, cwd, env);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`Dependency installation failed: ${detail} Setup files were kept. Retry init to finish installing all required dependencies.`, { cause: error });
+    }
   }
-  try {
-    await (options.installer ?? installProject)(command, args, cwd, env);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    const retry =
-      command === "yarn"
-        ? "Retry init to select the correct Yarn flags."
-        : `Retry init, or run ${command} ${args.join(" ")}.`;
-    throw new Error(
-      `Dependency installation failed: ${detail} Setup files were kept. ${retry}`,
-      { cause: error },
-    );
+  if (options.install !== false) {
+    lines.push(`Dependencies installed with ${plan.packageManager}; lifecycle scripts were disabled.`);
   }
-  lines.push(
-    `Dependencies installed with ${command}; lifecycle scripts were disabled.`,
-  );
   return lines;
 }

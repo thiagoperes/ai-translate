@@ -386,6 +386,7 @@ export async function runInit(
   }
   lines.push("", `Package manager: ${project.packageManager}.`);
   if (options.preview === true) {
+    lines.push(...project.notices);
     for (const file of files) {
       if (file.contents !== file.original || file === config) {
         lines.push(
@@ -401,10 +402,12 @@ export async function runInit(
     if (project.manifestContents !== undefined) {
       lines.push("", "Would write package.json:", "", project.manifestContents);
     }
-    lines.push(
-      "",
-      `Would ${options.install === false ? "skip installation; run" : "install with"}: ${project.installCommand.command} ${project.installCommand.args.join(" ")}`,
-    );
+    for (const command of project.installCommands) {
+      lines.push(
+        "",
+        `Would ${options.install === false ? "skip installation; run" : "install with"}: ${command.command} ${command.args.join(" ")}`,
+      );
+    }
     return { configPath: null, lines, setup };
   }
   for (const file of files) {

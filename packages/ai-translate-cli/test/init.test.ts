@@ -197,7 +197,7 @@ describe("runInit", () => {
     const root = await seedProject(i18nextProject());
 
     expect((await runInit(root)).lines.join("\n")).toContain(
-      "Install dependencies: npm install --save-dev --ignore-scripts @ai-translate/cli @ai-translate/fs-json @ai-translate/message-formats " +
+      "Install dependencies: npm install --save-dev --ignore-scripts @ai-translate/cli@latest @ai-translate/fs-json@latest @ai-translate/message-formats@latest " +
         "@ai-translate/provider-openai",
     );
   });
@@ -211,13 +211,13 @@ describe("runInit", () => {
     });
 
     expect(lines.join("\n")).toContain(
-      "Install dependencies: npm install --save-dev --ignore-scripts @ai-translate/cli @ai-translate/fs-json @ai-translate/message-formats " +
-        "@ai-translate/provider-ai-sdk ai @ai-sdk/anthropic",
+      "Install dependencies: npm install --save-dev --ignore-scripts @ai-translate/cli@latest @ai-translate/fs-json@latest @ai-translate/message-formats@latest " +
+        "@ai-translate/provider-ai-sdk@latest ai @ai-sdk/anthropic",
     );
     expect(lines.join("\n")).toContain("Set ANTHROPIC_API_KEY");
   });
 
-  it("installs declared dependencies for fresh clones without adding them again", async () => {
+  it("refreshes declared translation packages for generated config compatibility", async () => {
     const root = await seedProject(
       i18nextProject({
         "package.json": JSON.stringify({
@@ -232,7 +232,7 @@ describe("runInit", () => {
       }),
     );
 
-    expect((await runInit(root)).lines.join("\n")).toContain("Install dependencies: npm install --ignore-scripts\n");
+    expect((await runInit(root)).lines.join("\n")).toContain("npm install --save-prod --ignore-scripts @ai-translate/cli@latest");
   });
 
   it("surfaces detection warnings next to the config it wrote", async () => {
@@ -287,7 +287,7 @@ describe("native project initialization", () => {
     expect(written).toContain("createAppleStringCatalog({");
     expect(written).toContain("createAppleStringsCatalog({");
     expect(written).toContain('"include": ["App/Localizable.xcstrings","Package/Resources/Localizable.xcstrings"],');
-    expect(result.lines.join("\n")).toContain("Install dependencies: npm install --save-dev --ignore-scripts @ai-translate/cli @ai-translate/fs-json @ai-translate/apple @ai-translate/provider-openai");
+    expect(result.lines.join("\n")).toContain("Install dependencies: npm install --save-dev --ignore-scripts @ai-translate/cli@latest @ai-translate/fs-json@latest @ai-translate/apple@latest @ai-translate/provider-openai@latest");
   });
 
   it("explains the required externalization for Expo and Tauri without resources", async () => {

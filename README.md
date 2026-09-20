@@ -38,7 +38,9 @@ installs its dependencies with your project's npm, pnpm, Yarn, or Bun, and valid
 the generated config and source resources. It also
 adds translation scripts, an API-key template, and ignore entries for local secrets
 and `node_modules`. Swift-only projects get a private `package.json` for the tooling.
-Existing dependency versions, scripts, resource files, and credentials are preserved.
+Required `@ai-translate/*` packages are refreshed to their latest releases, keeping
+their dependency categories. Unrelated dependency versions, scripts, resource files,
+and credentials are preserved; custom workspace/file sources are kept with a notice.
 
 Set your provider key in the shell or `.env.local` (`OPENAI_API_KEY` by default), then:
 

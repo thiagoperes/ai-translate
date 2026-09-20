@@ -44,6 +44,7 @@ async function packPackages(packageDirs, tarballDir) {
     packages.push({
       name: packageName,
       tarballPath: path.isAbsolute(tarballName) ? tarballName : path.join(tarballDir, tarballName),
+      version: packageJson.version,
     });
   }
 
@@ -235,6 +236,62 @@ async function verifyAutomaticInstallation(packages, tempRoot, launcherBin) {
   assert.equal(await readFile(path.join(cwd, "Localizable.xcstrings"), "utf8"), catalog);
 }
 
+/** Broad tarball overrides can make an old declared range look compatible.
+ * Check the requested upgrade commands as well as the installed runtime. */
+async function verifyExistingToolkitUpgrade(packages, tempRoot, launcherBin) {
+  const cwd = path.join(tempRoot, "existing-toolkit-upgrade");
+  await mkdir(path.join(cwd, "resources/source"), { recursive: true });
+  await mkdir(path.join(cwd, "resources/output"));
+  const existing = {
+    dependencies: { "@ai-translate/fs-json": "^0.2.4", picocolors: "1.1.1" },
+    devDependencies: { "@ai-translate/cli": "^0.2.3", "@ai-translate/message-formats": "^0.1.0" },
+    optionalDependencies: { "@ai-translate/provider-openai": "^0.3.2" },
+  };
+  await writeFile(path.join(cwd, "package.json"), JSON.stringify({
+    ...existing,
+    name: "ai-translate-upgrade-smoke",
+    packageManager: "pnpm@10.32.1",
+    private: true,
+    type: "module",
+  }));
+  await writePackedWorkspace(packages, cwd);
+  const appConfig = JSON.stringify({ expo: {
+    ios: { infoPlist: { CFBundleDevelopmentRegion: "en" } },
+    locales: { en: "resources/source/English.json", fr: "resources/output/French.json" },
+  } });
+  await writeFile(path.join(cwd, "app.json"), appConfig);
+  const source = JSON.stringify({ ios: { NSCameraUsageDescription: "Take a photo" } });
+  const sourcePath = path.join(cwd, "resources/source/English.json");
+  await writeFile(sourcePath, source);
+  const options = { cwd, env: { OPENAI_API_KEY: undefined } };
+  const preview = await execa("node", [launcherBin, "init", "--preview"], options);
+  for (const section of Object.keys(existing)) {
+    for (const name of Object.keys(existing[section]).filter((candidate) => candidate.startsWith("@ai-translate/"))) {
+      assert.ok(preview.stdout.includes(`${name}@latest`), `init must request a refresh for existing ${name}.`);
+    }
+  }
+  const initialized = await execa("node", [launcherBin, "init"], options);
+  assert.match(initialized.stdout, /Generated configuration and source resources validated/u);
+  const manifest = JSON.parse(await readFile(path.join(cwd, "package.json"), "utf8"));
+  assert.equal(manifest.dependencies.picocolors, "1.1.1");
+  for (const [section, dependencies] of Object.entries(existing)) {
+    for (const [name, previous] of Object.entries(dependencies).filter(([candidate]) => candidate.startsWith("@ai-translate/"))) {
+      assert.ok(manifest[section]?.[name], `${name} must remain in ${section}.`);
+      assert.notEqual(manifest[section][name], previous, `${name} must replace its old registry range.`);
+      for (const other of Object.keys(existing).filter((candidate) => candidate !== section)) {
+        assert.equal(manifest[other]?.[name], undefined, `${name} must not move to ${other}.`);
+      }
+      const installed = JSON.parse(await readFile(path.join(cwd, "node_modules", name, "package.json"), "utf8"));
+      assert.equal(installed.version, packages.find((pkg) => pkg.name === name)?.version);
+    }
+  }
+  const sync = await execa("pnpm", ["exec", "ai-translate", "sync", "--dry-run"], options);
+  assert.match(sync.stdout, /"translatedEntries":\s*1\b/u);
+  assert.equal(await readFile(sourcePath, "utf8"), source);
+  assert.equal(await readFile(path.join(cwd, "app.json"), "utf8"), appConfig);
+  assert.deepEqual(await readdir(path.join(cwd, "resources/output")), []);
+}
+
 const tempRoot = await mkdtemp(path.join(os.tmpdir(), "ai-translate-pack-"));
 
 try {
@@ -246,6 +303,7 @@ try {
   await verifyDetectedConfigs(consumerDir);
   const launcherBin = await verifyLauncher(packages, tempRoot);
   await verifyAutomaticInstallation(packages, tempRoot, launcherBin);
+  await verifyExistingToolkitUpgrade(packages, tempRoot, launcherBin);
 } finally {
   await rm(tempRoot, { force: true, recursive: true });
 }

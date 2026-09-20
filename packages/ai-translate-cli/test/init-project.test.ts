@@ -8,6 +8,7 @@ import { applyProjectSetup, packageManagerProcess, planProjectSetup } from "../s
 
 const workspaces: string[] = [];
 const required = ["@ai-translate/cli", "@ai-translate/apple", "@ai-translate/provider-openai"];
+const requiredSpecs = required.map((name) => `${name}@latest`);
 
 afterEach(async () => {
   vi.unstubAllEnvs();
@@ -33,6 +34,59 @@ async function managerShim(bin: string, name: string, source: string): Promise<v
 }
 
 describe("project setup planning", () => {
+  it.each(["npm", "pnpm", "yarn", "bun"] as const)("refreshes first-party packages in their existing sections with %s", async (manager) => {
+    const original = {
+      packageManager: `${manager}@1.0.0`,
+      dependencies: { "@ai-translate/cli": "^0.2.0", react: "18.0.0" },
+      devDependencies: { "@ai-translate/apple": "next", "@ai-translate/html": "^0.1.0", "@ai-sdk/openai": "^1.0.0" },
+      optionalDependencies: { "@ai-translate/provider-openai": "~0.1.0" },
+    };
+    const root = await project({ "package.json": JSON.stringify(original) });
+    const plan = await planProjectSetup(root, [...required, "@ai-sdk/openai", "ai"]);
+    const flags = manager === "npm" || manager === "pnpm"
+      ? [["--save-prod"], ["--save-dev"], ["--save-optional"]]
+      : [[], ["--dev"], ["--optional"]];
+    const common = manager === "yarn" ? [] : ["--ignore-scripts"];
+    expect(plan.installCommands.map((command) => command.args)).toEqual([
+      [manager === "npm" ? "install" : "add", ...flags[0] ?? [], ...common, "@ai-translate/cli@latest"],
+      [manager === "npm" ? "install" : "add", ...flags[1] ?? [], ...common, "@ai-translate/apple@latest", "ai"],
+      [manager === "npm" ? "install" : "add", ...flags[2] ?? [], ...common, "@ai-translate/provider-openai@latest"],
+    ]);
+    expect(JSON.parse(plan.manifestContents ?? "{}")).toMatchObject(original);
+    expect(plan.notices).toHaveLength(3);
+    expect(plan.installCommands.flatMap(({ args }) => args)).not.toContain("react");
+    expect(plan.installCommands.flatMap(({ args }) => args)).not.toContain("@ai-translate/html@latest");
+    expect(plan.installCommands.flatMap(({ args }) => args)).not.toContain("@ai-sdk/openai");
+  });
+
+  it.each(["0.2.3", "^0.2.0", "~0.2", "^0.2 || ^0.3", "latest", "next", "*", ">=0.1 <1", "1.0.0-beta.1"])("refreshes registry declaration %s explicitly", async (version) => {
+    const root = await project({ "package.json": JSON.stringify({ devDependencies: { "@ai-translate/cli": version } }) });
+    const plan = await planProjectSetup(root, ["@ai-translate/cli"]);
+    expect(plan.installCommands[0]?.args).toEqual(["install", "--save-dev", "--ignore-scripts", "@ai-translate/cli@latest"]);
+  });
+
+  it.each(["workspace:*", "file:../cli", "link:../cli", "portal:../cli", "patch:cli.patch", "git+https://example.com/cli.git", "https://user:secret-marker@example.com/cli.tgz", "github:owner/repo", "owner/repo#main", "npm:@fork/cli@1", "../cli", "/vendor/cli", "C:\\vendor\\cli", "catalog:"])("preserves custom source %s and explains its compatibility obligation", async (version) => {
+    const original = { devDependencies: { "@ai-translate/cli": version } };
+    const root = await project({ "package.json": JSON.stringify(original) });
+    const plan = await planProjectSetup(root, ["@ai-translate/cli"]);
+    expect(plan.installCommands[0]?.args).toEqual(["install", "--ignore-scripts"]);
+    expect(plan.notices.join("\n")).toContain("cannot refresh it automatically");
+    expect(plan.notices.join("\n")).not.toContain("secret-marker");
+    expect(JSON.parse(plan.manifestContents ?? "{}")).toMatchObject(original);
+  });
+
+  it("refreshes the unscoped launcher only when it is requested", async () => {
+    const root = await project({ "package.json": '{"devDependencies":{"ai-translate":"^0.1.0"}}' });
+    expect((await planProjectSetup(root, ["ai-translate"])).installCommands[0]?.args).toContain("ai-translate@latest");
+  });
+
+  it("rejects ambiguous first-party dependency sections before writing", async () => {
+    const original = '{"dependencies":{"@ai-translate/cli":"0.2.0"},"devDependencies":{"@ai-translate/cli":"0.3.0"}}';
+    const root = await project({ "package.json": original });
+    await expect(planProjectSetup(root, ["@ai-translate/cli"])).rejects.toThrow(/multiple dependency sections.*Keep it in one section/u);
+    expect(await fs.readFile(path.join(root, "package.json"), "utf8")).toBe(original);
+  });
+
   it("plans a private native manifest without touching the project", async () => {
     const root = await project();
     const plan = await planProjectSetup(root, required);
@@ -45,7 +99,7 @@ describe("project setup planning", () => {
         "translate:validate": "ai-translate validate",
       },
     });
-    expect(plan.installCommand.args).toEqual(["install", "--save-dev", "--ignore-scripts", ...required]);
+    expect(plan.installCommands[0]?.args).toEqual(["install", "--save-dev", "--ignore-scripts", ...requiredSpecs]);
     expect(await fs.readdir(root)).toEqual([]);
   });
 
@@ -64,7 +118,9 @@ describe("project setup planning", () => {
     expect(JSON.parse(plan.manifestContents ?? "{}")).toMatchObject(manifest);
     expect(plan.manifestContents).toContain('\n\t"name"');
     expect(plan.packages).toEqual([]);
-    expect(plan.installCommand.args).toEqual(["install", "--ignore-scripts"]);
+    expect(plan.installCommands[0]?.args).toEqual(["install", "--save-prod", "--ignore-scripts", "@ai-translate/cli@latest"]);
+    expect(plan.notices.join("\n")).toContain("Kept @ai-translate/apple's custom source");
+    expect(plan.notices.join("\n")).toContain("Kept @ai-translate/provider-openai's custom source");
   });
 
   it("keeps empty existing scripts instead of overwriting user choices", async () => {
@@ -91,8 +147,8 @@ describe("project setup planning", () => {
     const root = await project({ [lockfile]: "" });
     const plan = await planProjectSetup(root, required);
     expect(plan.packageManager).toBe(manager);
-    expect(plan.installCommand.args).toEqual([...args, ...required]);
-    expect(plan.installCommand.env).toEqual(manager === "yarn" ? { YARN_ENABLE_SCRIPTS: "false" } : undefined);
+    expect(plan.installCommands[0]?.args).toEqual([...args, ...requiredSpecs]);
+    expect(plan.installCommands[0]?.env).toEqual(manager === "yarn" ? { YARN_ENABLE_SCRIPTS: "false" } : undefined);
   });
 
   it("does not mistake multiple lockfiles for the same manager as ambiguity", async () => {
@@ -116,10 +172,10 @@ describe("project setup planning", () => {
     });
     const member = await planProjectSetup(path.join(root, "packages/app"), required);
     expect(member.packageManager).toBe("pnpm");
-    expect(member.installCommand.args).not.toContain("--workspace-root");
-    expect(member.installCommand.cwd).toBe(await fs.realpath(path.join(root, "packages/app")));
+    expect(member.installCommands[0]?.args).not.toContain("--workspace-root");
+    expect(member.installCommands[0]?.cwd).toBe(await fs.realpath(path.join(root, "packages/app")));
     const workspace = await planProjectSetup(root, required);
-    expect(workspace.installCommand.args).toContain("--workspace-root");
+    expect(workspace.installCommands[0]?.args).toContain("--workspace-root");
   });
 
   it("uses ancestor workspace lockfiles and detects conflicting member locks", async () => {
@@ -140,7 +196,7 @@ describe("project setup planning", () => {
     });
     const plan = await planProjectSetup(path.join(root, "native/App"), required);
     expect(plan.packageManager).toBe("npm");
-    expect(plan.installCommand.args).not.toContain("--workspace-root");
+    expect(plan.installCommands[0]?.args).not.toContain("--workspace-root");
   });
 
   it.each([
@@ -227,6 +283,37 @@ describe("project setup planning", () => {
 });
 
 describe("applying project setup", () => {
+  it("prints every category-preserving upgrade command with --no-install", async () => {
+    const root = await project({ "package.json": JSON.stringify({ dependencies: { "@ai-translate/cli": "0.2.0" }, optionalDependencies: { "@ai-translate/provider-openai": "0.1.0" } }) });
+    const installer = vi.fn();
+    const lines = await applyProjectSetup(await planProjectSetup(root, required), { install: false, installer });
+    expect(lines.join("\n")).toContain("--save-prod --ignore-scripts @ai-translate/cli@latest");
+    expect(lines.join("\n")).toContain("--save-dev --ignore-scripts @ai-translate/apple@latest");
+    expect(lines.join("\n")).toContain("--save-optional --ignore-scripts @ai-translate/provider-openai@latest");
+    expect(installer).not.toHaveBeenCalled();
+  });
+
+  it("runs installation groups sequentially and stops after a failed group", async () => {
+    const root = await project({ "package.json": JSON.stringify({ dependencies: { "@ai-translate/cli": "0.2.0" }, optionalDependencies: { "@ai-translate/provider-openai": "0.1.0" } }) });
+    let active = 0;
+    let peak = 0;
+    const completed: string[] = [];
+    const installer = vi.fn(async (_command: string, args: readonly string[]) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      try {
+        await new Promise((resolve) => { setTimeout(resolve, 1); });
+        completed.push(args[1] ?? "");
+        if (args.includes("--save-dev")) {throw new Error("registry unavailable");}
+      } finally {
+        active -= 1;
+      }
+    });
+    await expect(applyProjectSetup(await planProjectSetup(root, required), { installer })).rejects.toThrow(/Retry init to finish installing all/u);
+    expect(completed).toEqual(["--save-prod", "--save-dev"]);
+    expect(peak).toBe(1);
+  });
+
   it("writes setup without invoking an installer when installation is disabled", async () => {
     const root = await project();
     const installer = vi.fn().mockResolvedValue(undefined);
@@ -240,7 +327,7 @@ describe("applying project setup", () => {
     const root = await project();
     const installer = vi.fn().mockResolvedValue(undefined);
     await applyProjectSetup(await planProjectSetup(root, required), { installer });
-    expect(installer).toHaveBeenCalledWith("npm", ["install", "--save-dev", "--ignore-scripts", ...required], await fs.realpath(root), undefined);
+    expect(installer).toHaveBeenCalledWith("npm", ["install", "--save-dev", "--ignore-scripts", ...requiredSpecs], await fs.realpath(root), undefined);
   });
 
   it("shows safe manual installation commands for both Yarn generations", async () => {
@@ -258,7 +345,7 @@ describe("applying project setup", () => {
     const installer = vi.fn().mockResolvedValue(undefined);
     expect(plan.manifestContents).toBeUndefined();
     await applyProjectSetup(plan, { installer });
-    expect(installer).toHaveBeenCalledWith("npm", ["install", "--ignore-scripts"], await fs.realpath(root), undefined);
+    expect(installer).toHaveBeenCalledWith("npm", ["install", "--save-prod", "--ignore-scripts", ...requiredSpecs], await fs.realpath(root), undefined);
     expect(await fs.readFile(path.join(root, "package.json"), "utf8")).toBe(before);
   });
 
