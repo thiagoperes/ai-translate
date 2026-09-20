@@ -4,9 +4,56 @@
 
 [![CI](https://github.com/thiagoperes/ai-translate/actions/workflows/ci.yml/badge.svg)](https://github.com/thiagoperes/ai-translate/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%E2%89%A520.19-brightgreen.svg)](#install)
+[![Node](https://img.shields.io/badge/node-%E2%89%A520.19-brightgreen.svg)](#get-started)
 
-`ai-translate` is a TypeScript toolkit and CLI for keeping every locale in sync with a single source locale. It detects only new or changed content, sends just that work to your translation provider, validates every candidate before writing it, and records provenance so CI can prove translations are current—without retranslating unchanged content or overwriting human corrections.
+`ai-translate` keeps localization resources in sync with your source language. It
+translates new or changed strings, validates the results, preserves human edits,
+and checks for stale translations in CI. MIT licensed; bring your own model API key.
+
+## Supported projects and formats
+
+| Project | Translation resources | Automatic setup |
+| --- | --- | --- |
+| iOS / macOS: SwiftUI, UIKit, AppKit | Xcode `.xcstrings` and `.lproj/*.strings` | Detects catalogs, tables, Xcode projects, and Apple Swift packages. |
+| Expo native permissions and labels | JSON files mapped by `expo.locales` | Reads `app.json` or a static `app.config.ts` / `.js` without executing it. |
+| React Native / Tauri shared UI | i18next locale JSON | Detects existing i18next resources; composes them with native resources. |
+| Next.js | next-intl or i18next messages | Detects message files, source language, and target languages. |
+| Other apps, websites, and content | JSON, HTML, Markdoc; ICU and i18next messages | Compose adapters in a config; custom detectors use the same integration interface. |
+
+Native catalogs support plural/device variations and Apple printf placeholders.
+App code still needs to use its platform's localization APIs: the CLI translates
+resources, while Xcode and your runtime handle extraction, bundles, and display.
+See the [native app guide](docs/native-apps.md) for that wiring.
+
+## Get started
+
+Run from your app's root with Node 22 or newer:
+
+```bash
+npx ai-translate init
+```
+
+`init` detects supported resources, combines compatible setups, writes the config,
+installs its dependencies with your project's npm, pnpm, Yarn, or Bun, and validates
+the generated config and source resources. It also
+adds translation scripts, an API-key template, and ignore entries for local secrets
+and `node_modules`. Swift-only projects get a private `package.json` for the tooling.
+Required `@ai-translate/*` packages are refreshed to their latest releases, keeping
+their dependency categories. Unrelated dependency versions, scripts, resource files,
+and credentials are preserved; custom workspace/file sources are kept with a notice.
+
+Set your provider key in the shell or `.env.local` (`OPENAI_API_KEY` by default), then:
+
+```bash
+npx ai-translate sync --dry-run   # inspect what needs translation
+npx ai-translate sync             # translate, validate, write
+npx ai-translate check            # read-only CI gate
+```
+
+Use `init --preview` to see every setup change without writing or installing.
+Use `init --locale fr --locale de` when the project has no target languages yet.
+`--no-install` prepares the files and prints the install command. If a config
+already exists, identical setup can be resumed; changed configs require `--force`.
 
 Key features:
 
@@ -15,16 +62,9 @@ Key features:
 | ⚡ **Incremental** | Translate only new or changed strings. |
 | 🛡️ **Validated** | Protect placeholders, tags, glossary terms, and structure. |
 | ✅ **CI-ready** | Catch stale locales with a read-only `check`. |
-| 🧩 **Flexible** | Supports Xcode string catalogs, Apple `.strings`, JSON, Markdoc, HTML, ICU, i18next, and Next.js. |
 | ✍️ **Human-friendly** | Preserve manual edits with atomic writes. |
-| 📈 **Scalable** | Use sharded state, scoped runs, and pluggable providers. |
-| 💸 **Cheap** | Around [$1 per million source words, per locale](#what-it-costs). |
-
-```bash
-npx ai-translate sync --dry-run   # what would be translated, and why
-npx ai-translate sync             # translate, validate, write
-npx ai-translate check            # CI gate: fails if a locale is behind
-```
+| 🧩 **Composable** | Share state, providers, and validation across resource adapters. |
+| 💸 **Usage-based** | Pay your model provider for the work that changes; see the [cost examples](#what-it-costs). |
 
 ## Why this exists
 
@@ -79,7 +119,10 @@ Prompt caching is not a meaningful lever here. The only prefix shared across cal
 
 Token counts are measured by capturing the payloads the provider actually sends at stock defaults, the same method as [`bench/prompt.bench.mjs`](bench/prompt.bench.mjs), rather than estimated from the prompt source. Prices are the published rate cards as of 2026-08-07 and will drift; re-check them before quoting a budget.
 
-## Install
+## Library installation
+
+`init` installs the CLI and adapters automatically. For direct library use, install
+the packages your configuration needs:
 
 ```bash
 npm install --save-dev @ai-translate/cli @ai-translate/core @ai-translate/fs-json @ai-translate/provider-openai
@@ -98,8 +141,7 @@ automatically, and translator comments become request context. Multiple locales
 in one string catalog are updated without replacing the source or other locales.
 
 ```bash
-npm install --save-dev @ai-translate/cli @ai-translate/apple @ai-translate/fs-json @ai-translate/provider-openai
-npx ai-translate init --integration apple --preview
+npx ai-translate init
 ```
 
 For Expo, translate committed `expo.locales` JSON with the existing JSON adapter
@@ -118,7 +160,7 @@ catalog can affect the app.
 npx ai-translate init
 ```
 
-`init` inspects the project for **next-intl**, **i18next**, or **Apple resources**, finds the message files, reads the locale list and the default locale, and writes an `ai-translate.config.ts` wired to what it found. It prints the evidence for every conclusion, and writes nothing else — installing packages and setting `OPENAI_API_KEY` stay in your hands.
+`init` detects **next-intl**, **i18next**, **Expo locale mappings**, and **Apple resources**, then sets up the config, dependencies, and scripts. It prints the evidence for each conclusion. Independent resource sets with the same source locale share one config; overlapping or incompatible setups can be selected with `--integration <id>`.
 
 ```text
 Detected i18next:
@@ -128,7 +170,7 @@ Detected i18next:
   - Source locale en, 15 target locale(s): de, el, es, et, fi, fr, ga, hr, it, lt, lv, nl, pt, sk, sl
 ```
 
-Use `--preview` to see the config without writing it, and `--integration <id>` if the project runs more than one library. Detection is read-only and never imports project code; see [`@ai-translate/integrations`](packages/ai-translate-integrations) to add your own integration.
+Use `--preview` to see the full setup plan without writes or installation. Detection is read-only and never imports project code; see [`@ai-translate/integrations`](packages/ai-translate-integrations) to add your own integration.
 
 To generate a config that runs on a model other than OpenAI's, add `--provider ai-sdk` and name the AI SDK vendor package:
 
@@ -205,7 +247,7 @@ Then wire the gate into CI:
 
 | Command | What it does |
 | --- | --- |
-| `init` | Detect Apple or Next.js/i18next localization and write `ai-translate.config.ts`. |
+| `init` | Detect localization resources, generate a config, and install project tooling. |
 | `sync` | Translate everything that needs it, validate, audit, and write. |
 | `check` | Read-only CI gate. Fails if validation, a dry-run sync, or audit provenance would produce work. |
 | `validate` | Structural and source-level validation only, no provider calls. |

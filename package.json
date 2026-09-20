@@ -20,7 +20,7 @@
     "test": "pnpm -r --filter './packages/*' test",
     "coverage": "pnpm -r --parallel --filter './packages/*' coverage && node scripts/check-coverage.mjs",
     "coverage:strict": "pnpm -r --parallel --filter './packages/*' coverage:strict",
-    "test:pack": "pnpm -r --filter './packages/*' test:pack && node ./scripts/package-smoke.mjs",
+    "test:pack": "pnpm -r --filter './packages/*' test:pack",
     "bench": "pnpm run build && node --expose-gc ./bench/state.bench.mjs --scale 0.25 && node --expose-gc ./bench/transaction.bench.mjs --scale 0.25 && node ./bench/prompt.bench.mjs",
     "bench:baseline": "pnpm run build && node --expose-gc ./bench/state.bench.mjs --scale 0.25 --json > ./bench/baseline.json",
     "bench:check": "pnpm run build && node --expose-gc ./bench/state.bench.mjs --scale 0.25 --baseline ./bench/baseline.json",

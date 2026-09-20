@@ -1,27 +1,29 @@
 {
-  "name": "@ai-translate/provider-openai",
-  "version": "0.2.4",
-  "description": "OpenAI translation and semantic-audit providers for ai-translate, with structured output and batching.",
+  "name": "ai-translate",
+  "version": "0.1.0",
+  "description": "Run ai-translate with npx: native Apple, JSON, and content translation pipelines.",
   "keywords": [
     "i18n",
     "l10n",
-    "internationalization",
     "localization",
     "translation",
-    "openai",
-    "ai",
-    "llm"
+    "cli",
+    "ios",
+    "ai"
   ],
   "license": "MIT",
   "author": "Thiago Peres",
-  "homepage": "https://github.com/thiagoperes/ai-translate#packages",
+  "homepage": "https://github.com/thiagoperes/ai-translate#readme",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/thiagoperes/ai-translate.git",
-    "directory": "packages/ai-translate-provider-openai"
+    "directory": "packages/ai-translate-launcher"
   },
   "bugs": {
     "url": "https://github.com/thiagoperes/ai-translate/issues"
+  },
+  "bin": {
+    "ai-translate": "./dist/bin.mjs"
   },
   "files": [
     "dist"
@@ -47,16 +49,12 @@
     "lint": "oxlint -c ../../.oxlintrc.json --type-aware --deny-warnings src test vitest.config.ts tsdown.config.ts",
     "test": "vitest run --config vitest.config.ts",
     "coverage": "vitest run --config vitest.config.ts --coverage",
-    "coverage:strict": "vitest run --config vitest.config.ts --coverage --coverage.include=src/index.ts --coverage.thresholds.lines=95 --coverage.thresholds.functions=95 --coverage.thresholds.branches=95 --coverage.thresholds.statements=95",
-    "test:pack": "publint . && attw --pack . --profile esm-only"
+    "test:pack": "publint . && attw --pack . --profile esm-only && node ../../scripts/package-smoke.mjs"
   },
   "dependencies": {
-    "@ai-translate/core": "workspace:*",
-    "@ai-translate/provider-core": "workspace:*",
-    "openai": "7.18.0",
-    "zod": "4.6.5"
+    "@ai-translate/cli": "workspace:*"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=20.19.0"
   }
 }

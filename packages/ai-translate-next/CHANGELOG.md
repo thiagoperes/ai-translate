@@ -1,5 +1,12 @@
 # @ai-translate/next
 
+## 0.1.3
+
+### Patch Changes
+
+- Updated dependencies [`a9d7b0c`]:
+  - @ai-translate/integrations@0.2.0
+
 ## 0.1.2
 
 ### Patch Changes

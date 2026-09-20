@@ -7,10 +7,10 @@ See the [project README](../../README.md) for what the toolkit does and how a sy
 ## Install
 
 ```bash
-npm install --save-dev @ai-translate/cli
+npx ai-translate init
 ```
 
-Requires Node 20.19 or newer.
+Automatic setup with the default provider requires Node 22 or newer. The CLI itself supports Node 20.19 or newer.
 
 ## Configuration
 
@@ -56,16 +56,18 @@ This is how a provider API key normally reaches your config, for example `apiKey
 
 ### `init`
 
-Detects the project's localization resources and writes `ai-translate.config.ts`. This is the only command that runs without an existing config.
+Detects the project's localization resources, writes its config, and installs the required dependencies using the project's npm, pnpm, Yarn, or Bun. Adds missing translation scripts, `.env.example`, and ignore entries for local secrets and `node_modules`. Swift-only projects get a private tooling manifest. This command runs without an existing config.
 
 ```bash
 ai-translate init
 ai-translate init --preview
 ai-translate init --integration i18next
-ai-translate init --integration apple --preview
+ai-translate init --locale fr --locale pl
+ai-translate init --no-install
+ai-translate init --package-manager pnpm
 ```
 
-Recognises **next-intl**, **i18next** (including Expo/React Native projects using `react-i18next`), and **Apple localization** (`.xcstrings` catalogs and `.lproj/*.strings` tables). Detection infers source and target languages from resources and Xcode settings and prints the evidence behind each conclusion. Multiple native resource roots become one configuration.
+Recognises **next-intl**, **i18next** (including Expo/React Native projects using `react-i18next`), **Expo native locale mappings**, and **Apple localization** (`.xcstrings` catalogs and `.lproj/*.strings` tables). Detection infers source and target languages from resources and Xcode settings and prints the evidence behind each conclusion. Independent setups with the same source language become one configuration, retaining each catalog's message format. Overlapping detections or conflicting source locales require an explicit `--integration` choice.
 
 For an Xcode or Apple Swift package project without resources, `init` writes a starter config with explicit extraction instructions. Create and populate a String Catalog with Xcode, then configure your target languages. `init` does not extract hardcoded Swift, JavaScript, or Rust text and never invents target languages. Expo and Tauri projects without localization resources must externalize their text first.
 
@@ -76,15 +78,24 @@ projects with different source languages, and excludes generated native output.
 
 Custom detectors use the platform-neutral `@ai-translate/integrations` interfaces. Adapter plans declare the package, factory export, and literal options, so adding a platform does not require changing the CLI's config renderer. `@ai-translate/next` retains its existing detection APIs for compatibility.
 
-It writes exactly one file and nothing else. Installing packages, setting `OPENAI_API_KEY`, and reviewing the model choice are printed as next steps rather than done for you, so running it against an unfamiliar repository is safe.
+`--preview` shows the full plan without writes or network calls. `--no-install` creates setup files and prints the remaining install command. Installation disables lifecycle scripts. Required `@ai-translate/*` registry packages are refreshed to `@latest` so older adapters cannot silently ignore new config options. Existing runtime, development, and optional dependency categories are preserved. Unrelated dependency versions and scripts are preserved; custom workspace, file, link, Git, and alias sources are kept with a notice. Declared dependencies are installed even in a fresh clone. A failed install keeps setup files so the command can be retried. Identical configs can be resumed; replacing a changed config requires `--force`. All supported config extensions are protected.
+
+After installation, init loads the generated config and validates source resources without making translation requests. Missing target translations are expected at this stage.
+
+The CLI never invents credentials or target languages. Set the provider key in your shell or `.env.local`, and use repeated `--locale` options if languages cannot be inferred. It does not start paid translation calls during setup. Unknown package managers and ambiguous lockfiles require `--package-manager`; workspace package managers are inherited.
+
+Expo detection reads committed `expo.locales` mappings in `app.json` or a static exported `app.config.ts` / `.js` object. Computed config is not executed. Shared i18next UI and native metadata can be translated in the same configuration.
 
 | Flag | Effect |
 | --- | --- |
-| `--preview` | Print the config that would be written and touch nothing. |
+| `--preview` | Show the complete setup plan without writes or installation. |
 | `--integration <id>` | Choose between setups when a project matches more than one. |
-| `--force` | Overwrite an existing `ai-translate.config.ts`. Refuses without it. |
+| `--force` | Replace a changed existing config, preserving its filename. |
+| `--locale <locale>` | Set a target locale; repeat for multiple languages. |
+| `--package-manager <name>` | Select npm, pnpm, yarn, or bun explicitly. |
+| `--no-install` | Prepare setup files and print the dependency install command. |
 
-Exits non-zero when nothing is recognised, when a named integration was not detected, or when a config already exists and `--force` was not passed.
+Exits non-zero when nothing is recognised, when a named integration was not detected, when a changed config exists without `--force`, or when installation or source validation fails.
 
 ### `sync`
 

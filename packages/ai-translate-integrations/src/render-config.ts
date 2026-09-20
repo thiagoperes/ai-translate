@@ -26,7 +26,7 @@ function aiSdkFactory(providerPackage: string): string {
   return known[providerPackage] ?? "model";
 }
 
-function messageFormatImport(plan: IntegrationPlan): ConfigImport | undefined {
+function messageFormatImport(plan: Pick<IntegrationPlan, "messageFormat">): ConfigImport | undefined {
   if (typeof plan.messageFormat !== "string") {
     return plan.messageFormat;
   }
@@ -85,15 +85,16 @@ export function requiredConfigPackages(
   plan: IntegrationPlan,
   options: RenderConfigOptions = {},
 ): readonly string[] {
-  const format = messageFormatImport(plan);
   const catalogs = catalogPlans(plan);
   const specifiers = [
     "@ai-translate/cli",
     FS_JSON_PACKAGE,
     ...catalogs.map((catalog) => catalogFactory(catalog).from),
-    ...(catalogs.some((catalog) => catalog.kind !== "adapter") && format !== undefined
-      ? [format.from]
-      : []),
+    ...catalogs.flatMap((catalog) => {
+      if (catalog.kind === "adapter") {return [];}
+      const format = messageFormatImport({ messageFormat: catalog.messageFormat ?? plan.messageFormat });
+      return format === undefined ? [] : [format.from];
+    }),
     ...(catalogs.some((catalog) => catalog.kind !== "adapter" && catalog.plurals !== undefined)
       ? [MESSAGE_FORMATS_PACKAGE]
       : []),
@@ -142,7 +143,6 @@ export function renderConfig(plan: IntegrationPlan, options: RenderConfigOptions
   }
   addImport({ from: FS_JSON_PACKAGE, name: "createShardedJsonStateStore" });
 
-  const format = messageFormatImport(plan);
   const renderedCatalogs = catalogs.map((catalog) => {
     const factory = addImport(catalogFactory(catalog));
     let properties: string[];
@@ -154,6 +154,7 @@ export function renderConfig(plan: IntegrationPlan, options: RenderConfigOptions
         properties.push("sourceLocale,");
       }
     } else {
+      const format = messageFormatImport({ messageFormat: catalog.messageFormat ?? plan.messageFormat });
       properties = [
         ...(catalog.id === undefined ? [] : [`id: ${quote(catalog.id)},`]),
         ...(format === undefined ? [] : [`messageFormat: ${addImport(format)},`]),
@@ -161,6 +162,9 @@ export function renderConfig(plan: IntegrationPlan, options: RenderConfigOptions
           ? []
           : [`plurals: ${addImport({ from: MESSAGE_FORMATS_PACKAGE, name: "i18nextPluralKeys" })},`]),
         `rootDir: ${quote(catalog.rootDir)},`,
+        ...(catalog.kind === "document-json" && catalog.localeFiles !== undefined
+          ? [`localeFiles: ${JSON.stringify(catalog.localeFiles)},`]
+          : []),
         "sourceLocale,",
         ...(catalog.kind === "document-json"
           ? [`unitId: ${quote(catalog.unitId ?? "messages")},`]

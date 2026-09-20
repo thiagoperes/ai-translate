@@ -93,8 +93,8 @@ braces are supported. Apple printf validation is automatic here too.
 
 `ai-translate init --integration apple --preview` inspects native resources,
 Xcode projects, and Apple Swift packages without executing project code. Projects
-without catalogs receive explicit extraction/setup warnings. `init` writes only
-the configuration; it does not edit Xcode projects or extract hardcoded text.
+without catalogs receive explicit extraction/setup warnings. `init` sets up
+translation tooling; it does not edit Xcode projects or extract hardcoded text.
 
 Generated configs list the authored files found during detection. Mixed
 `Base.lproj` and source-locale tables are partitioned without translating the
@@ -107,7 +107,7 @@ repairing resources, run `init --preview` and update the include lists from its
 output. Legacy directory names such as `French.lproj` or `pt_BR.lproj` need
 manual setup or migration to language tags such as `fr` and `pt-BR`.
 
-`appleIntegration` implements the platform-neutral `Integration` interface from
+`appleIntegration` and `expoIntegration` implement the platform-neutral `Integration` interface from
 `@ai-translate/integrations`. Both adapters implement `CatalogAdapter`, so they
 compose with existing JSON, HTML, or Markdoc adapters and every provider.
 
@@ -116,6 +116,39 @@ specific Swift package, shared iOS/macOS, Expo, and Tauri setup recipes. For Exp
 prebuild, translate committed locale JSON using `applePrintfMessageFormat` from
 `@ai-translate/message-formats`; preserve generated iOS resources through Expo's
 own build workflow.
+
+### Expo native metadata
+
+`expoIntegration` detects `expo.locales` file mappings in `app.json` and static
+`app.config.ts` or `app.config.js` exports. It never executes application code.
+Dynamic config functions, imported values, spreads, and computed paths need
+manual configuration; an overriding dynamic config prevents fallback to stale
+`app.json` mappings. The detector preserves locale spellings and file paths,
+requires a readable source JSON object, and reports an inferred source language
+or missing targets. Output files may be missing, but their parent directories
+must exist within the project.
+
+Explicit mappings use the generic JSON document adapter's `localeFiles` option:
+
+```ts
+createLocalizedJsonDocument({
+  id: "native-metadata",
+  rootDir: ".",
+  unitId: "native-metadata",
+  sourceLocale: "en",
+  localeFiles: {
+    en: "locales/native/English.json",
+    fr: "locales/native/French.json",
+  },
+  messageFormat: applePrintfMessageFormat,
+});
+```
+
+Mapped paths are relative to `rootDir`; duplicate paths (including case and
+Unicode aliases) and paths outside that directory are rejected. Unmapped locales
+use `<locale>.json`. Add any new native
+language to Expo's mapping so prebuild includes it. This metadata catalog can
+compose with a separate i18next catalog for shared React Native UI.
 
 The CLI stages resource and state writes together. It checks for changes to live
 files before committing and aborts if they were edited during translation; rerun

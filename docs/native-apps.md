@@ -4,6 +4,21 @@
 Xcode, Swift, Expo, and your JavaScript/Rust runtime remain responsible for
 extracting text and selecting the correct language at runtime.
 
+## Automatic setup
+
+From the app root, run `npx ai-translate init`. The command detects authored native,
+Expo, and web localization resources; combines compatible catalogs; installs the
+required packages; and creates the config, translation scripts, and API-key template.
+It uses the existing package manager. A Swift-only project gets a private tooling
+`package.json`. Use `--preview` for a read-only plan or `--no-install` to prepare files
+offline. Existing resource files and runtime code are preserved.
+
+Set the provider key in your shell or `.env.local`. Target languages are read from
+the project; supply `--locale fr --locale pl` if they have not been declared yet.
+Projects with hardcoded text still need the extraction and runtime steps below.
+After extracting resources, review `init --preview` and rerun with `--force` to
+refresh the generated config.
+
 ## Choose the resource boundary
 
 | Surface | Resource | Adapter / message format |
@@ -209,7 +224,7 @@ For native permissions, create `locales/native/en.json`:
 }
 ```
 
-Map those files in Expo's app configuration, adding each translated locale:
+Map those files in Expo's app configuration, adding each target locale. `init` reads these mappings automatically, including filenames that differ from the locale name:
 
 ```json
 {

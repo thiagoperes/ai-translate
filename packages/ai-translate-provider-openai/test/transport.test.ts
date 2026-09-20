@@ -1,6 +1,6 @@
 import type OpenAI from "openai";
 import { zodResponseFormat } from "openai/helpers/zod";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import {
@@ -28,6 +28,10 @@ function createMockClient(parsed: unknown = { answer: "ja" }): {
 }
 
 const schema = z.object({ answer: z.string() });
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("createOpenAiTransport", () => {
   it.each([true, false])("accepts usage without optional token details (reporter: %s)", async (report) => {
@@ -76,14 +80,46 @@ describe("createOpenAiTransport", () => {
     });
   });
 
-  it("requires an api key or a client", () => {
-    expect(() => createOpenAiTransport()).toThrow(
-      "OpenAI transport requires either apiKey or client.",
-    );
+  it.each([undefined, "", "   "])("requires credentials only on the first real request (key: %s)", async (apiKey) => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    const transport = createOpenAiTransport(apiKey === undefined ? {} : { apiKey });
+    expect(transport.label).toBe("OpenAI");
+    await expect(transport.complete({
+      messages: [{ content: "Hello", role: "user" }],
+      modelId: "test",
+      schema,
+      schemaName: "answer",
+    })).rejects.toThrow(/requires either apiKey or client.*Set OPENAI_API_KEY/u);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("builds a client from an api key", () => {
-    expect(() => createOpenAiTransport({ apiKey: "sk-test" })).not.toThrow();
+  it("builds the SDK client lazily and supports concurrent requests using a local fetch stub", async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({
+      choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: '{"answer":"ja"}' } }],
+      created: 1,
+      id: "test-completion",
+      model: "test",
+      object: "chat.completion",
+    }), { headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetch);
+    const transport = createOpenAiTransport({ apiKey: "sk-test" });
+    expect(fetch).not.toHaveBeenCalled();
+    const request = { messages: [{ content: "Hello", role: "user" as const }], modelId: "test", schema, schemaName: "answer" };
+    await expect(Promise.all([transport.complete(request), transport.complete(request)])).resolves.toEqual([{ answer: "ja" }, { answer: "ja" }]);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps an explicitly supplied client even when no API key is configured", async () => {
+    const { client, parse } = createMockClient();
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    const transport = createOpenAiTransport({ apiKey: "", client });
+    const request = { messages: [{ content: "Hello", role: "user" as const }], modelId: "test", schema, schemaName: "answer" };
+    await transport.complete(request);
+    await transport.complete(request);
+    expect(parse).toHaveBeenCalledTimes(2);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("renders the neutral request in the OpenAI chat completions dialect", async () => {
@@ -176,6 +212,18 @@ describe("createOpenAiTransport", () => {
 });
 
 describe("OpenAI providers", () => {
+  it("constructs both providers and handles empty batches without credentials or API calls", async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    const translation = createOpenAiTranslationProvider();
+    const audit = createOpenAiSemanticAuditProvider();
+    expect(translation).toBeInstanceOf(OpenAiTranslationProvider);
+    expect(audit).toBeInstanceOf(OpenAiSemanticAuditProvider);
+    await expect(translation.translate({ locale: "de", requests: [] })).resolves.toEqual([]);
+    await expect(audit.audit({ auditId: "test", locale: "de", modelId: "test", pass: "forward", promptRevision: "v1", requests: [] })).resolves.toEqual([]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("defaults to the inexpensive reasoning model", async () => {
     const { client, parse } = createMockClient({
       translations: { greeting: { translation: "Hallo" } },
