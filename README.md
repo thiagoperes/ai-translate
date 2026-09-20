@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/thiagoperes/ai-translate/actions/workflows/ci.yml/badge.svg)](https://github.com/thiagoperes/ai-translate/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%E2%89%A520.19-brightgreen.svg)](#install)
+[![Node](https://img.shields.io/badge/node-%E2%89%A520.19-brightgreen.svg)](#get-started)
 
 `ai-translate` keeps localization resources in sync with your source language. It
 translates new or changed strings, validates the results, preserves human edits,
@@ -117,7 +117,10 @@ Prompt caching is not a meaningful lever here. The only prefix shared across cal
 
 Token counts are measured by capturing the payloads the provider actually sends at stock defaults, the same method as [`bench/prompt.bench.mjs`](bench/prompt.bench.mjs), rather than estimated from the prompt source. Prices are the published rate cards as of 2026-08-07 and will drift; re-check them before quoting a budget.
 
-## Install
+## Library installation
+
+`init` installs the CLI and adapters automatically. For direct library use, install
+the packages your configuration needs:
 
 ```bash
 npm install --save-dev @ai-translate/cli @ai-translate/core @ai-translate/fs-json @ai-translate/provider-openai

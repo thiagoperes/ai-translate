@@ -1,6 +1,6 @@
 {
   "name": "@ai-translate/integrations",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Composable project detection and configuration generation for ai-translate localization adapters.",
   "keywords": [
     "i18n",

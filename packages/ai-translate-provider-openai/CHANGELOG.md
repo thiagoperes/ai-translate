@@ -1,5 +1,11 @@
 # @ai-translate/provider-openai
 
+## 0.2.4
+
+### Patch Changes
+
+- Defer OpenAI client initialization until the first translation or semantic-audit request. Configuration validation, dry runs, and empty batches now work without an API key; actual requests still require credentials or an explicitly supplied client.
+
 ## 0.2.3
 
 ### Patch Changes

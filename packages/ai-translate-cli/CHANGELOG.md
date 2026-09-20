@@ -1,5 +1,19 @@
 # @ai-translate/cli
 
+## 0.4.0
+
+### Minor Changes
+
+- Make init a complete project setup command: detect and combine compatible localization catalogs, install dependencies with the existing package manager, and prepare scripts, environment templates, and ignore entries. Preserve authored resources, credentials, existing scripts and versions; support full preview, offline setup, explicit target locales, and retryable installs. Protect all config extensions and report the installed CLI version. Composed JSON catalogs retain their own message formats.
+
+### Patch Changes
+
+- Updated dependencies [`a9d7b0c`, `a9d7b0c`]:
+  - @ai-translate/integrations@0.2.0
+  - @ai-translate/apple@0.2.0
+  - @ai-translate/fs-json@0.3.0
+  - @ai-translate/next@0.1.3
+
 ## 0.3.0
 
 ### Minor Changes
