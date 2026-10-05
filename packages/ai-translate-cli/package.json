@@ -58,7 +58,7 @@
     "@ai-translate/fs-json": "workspace:*",
     "@ai-translate/integrations": "workspace:*",
     "@ai-translate/next": "workspace:*",
-    "dotenv": "17.4.2",
+    "dotenv": "18.0.5",
     "jiti": "2.7.0"
   },
   "devDependencies": {
