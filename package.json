@@ -36,17 +36,17 @@
     "@ai-translate/provider-openai": "workspace:*",
     "@arethetypeswrong/cli": "0.18.5",
     "@changesets/changelog-github": "1.0.1",
-    "@changesets/cli": "2.31.1",
-    "@types/node": "26.6.1",
-    "@vitest/coverage-v8": "4.1.11",
-    "execa": "10.0.1",
+    "@changesets/cli": "3.0.3",
+    "@types/node": "26.6.5",
+    "@vitest/coverage-v8": "5.0.5",
+    "execa": "10.1.1",
     "husky": "9.1.7",
-    "oxlint": "^1.83.0",
-    "oxlint-tsgolint": "^7.0.2002",
-    "publint": "0.3.24",
-    "tsdown": "0.23.0",
+    "oxlint": "^1.88.0",
+    "oxlint-tsgolint": "^7.0.2004",
+    "publint": "0.3.25",
+    "tsdown": "0.23.1",
     "typescript": "7.0.2",
-    "vitest": "4.1.11"
+    "vitest": "5.0.5"
   },
   "engines": {
     "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
