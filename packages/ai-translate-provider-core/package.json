@@ -52,7 +52,7 @@
   },
   "dependencies": {
     "@ai-translate/core": "workspace:*",
-    "zod": "4.6.5"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@ai-translate/message-formats": "workspace:*"
