@@ -56,7 +56,7 @@
   "dependencies": {
     "@ai-translate/core": "workspace:*",
     "@ai-translate/provider-core": "workspace:*",
-    "zod": "4.6.5"
+    "zod": "4.6.6"
   },
   "peerDependencies": {
     "ai": "^6.0.0 || ^7.0.0"
